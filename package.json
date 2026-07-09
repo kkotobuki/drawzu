@@ -1,0 +1,32 @@
+{
+  "name": "drawzu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "人間が図で見ているDBの姿とAIが前提にしているDBの姿を、同じ1個のモデルに揃える",
+  "scripts": {
+    "dev": "tsx watch server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "start": "tsx server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "mcp": "tsx server/mcp.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

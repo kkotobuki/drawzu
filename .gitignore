@@ -1,0 +1,43 @@
+# AI自律化ハーネス一式はリポジトリに含めない（ローカル専用。公開リポジトリのため）
+CLAUDE.md
+.claude/
+scripts/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# drawzu リポジトリ自身の .drawzu は開発時の実験台なので履歴に残さない
+# （使う側プロジェクトでは .drawzu/model.json をコミットするのが正）
+.drawzu/
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+.turbo/
+.vercel/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

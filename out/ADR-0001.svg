@@ -1,0 +1,47 @@
+<svg viewBox="0 0 920 660" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif">
+  <rect width="920" height="660" fill="#faf9f7"/>
+  <text x="40" y="48" font-size="13" fill="#9a8f80" letter-spacing="2">ADR-0001 · 設計判断の地図</text>
+  <text x="40" y="80" font-size="24" font-weight="700" fill="#2a2a2a">スキーマの真実の源を「1個のモデル」に置く</text>
+  <line x1="40" y1="98" x2="880" y2="98" stroke="#e5ddd2" stroke-width="1.5"/>
+  <text x="40" y="128" font-size="13" fill="#7a7266" font-weight="600">CONTEXT</text>
+  <text x="40" y="152" font-size="14" fill="#3a3a3a">Figmaや従来のER図ツールでは、図を編集してもスキーマ(テキスト)に反映されず、 リアルタイムに同期しない。図を真実の源にすると型・制約・RLS・indexなど 「図に描けない情報」が毎回落ち、二重管理に戻る。真実の源をどこに置くかを決める。</text>
+  <text x="40" y="212" font-size="13" fill="#7a7266" font-weight="600">DECISION MATRIX ─ 選択肢 × 評価軸</text>
+    <text x="373" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">リアルタイム同期</text>
+    <text x="518" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">情報の完全性</text>
+    <text x="663" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">AIからの操作性</text>
+    <text x="808" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">single-source適合</text>
+  <rect x="40" y="300" width="840" height="70" rx="8" fill="#f2ede5"/>
+    
+    <text x="60" y="332" font-size="15" font-weight="700" fill="#8a8276">選択肢 A</text>
+    <text x="60" y="352" font-size="11.5" fill="#9a8f80">図(GUI)を真実の源にする / AIがGUIをリモコン操作</text>
+    <text x="373" y="342" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+    <text x="518" y="342" text-anchor="middle" font-size="18" fill="#c25c4a">✕</text>
+    <text x="663" y="342" text-anchor="middle" font-size="18" fill="#b06a4a">△</text>
+    <text x="808" y="342" text-anchor="middle" font-size="18" fill="#c25c4a">✕</text>
+  <rect x="40" y="380" width="840" height="70" rx="8" fill="#e3efe8" stroke="#2d6a4f" stroke-width="2"/>
+    <rect x="40" y="380" width="6" height="70" rx="3" fill="#2d6a4f"/>
+    <text x="60" y="412" font-size="15" font-weight="700" fill="#2d6a4f">選択肢 B ✓</text>
+    <text x="60" y="432" font-size="11.5" fill="#4a7a60">1個のモデルを真実の源にし、図もSQLも投影にする</text>
+    <text x="373" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="518" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="663" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="808" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+  <rect x="40" y="460" width="840" height="70" rx="8" fill="#f2ede5"/>
+    
+    <text x="60" y="492" font-size="15" font-weight="700" fill="#8a8276">選択肢 C</text>
+    <text x="60" y="512" font-size="11.5" fill="#9a8f80">SQL/migrationを真実の源にし、図は出力のみ</text>
+    <text x="373" y="502" text-anchor="middle" font-size="18" fill="#b06a4a">△</text>
+    <text x="518" y="502" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="663" y="502" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+    <text x="808" y="502" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+  <text x="40" y="500" font-size="13" fill="#7a7266" font-weight="600">なぜこの決定か ─ 決め手：single-source適合</text>
+  <rect x="40" y="514" width="400" height="118" rx="8" fill="#fff" stroke="#e5ddd2"/>
+  <text x="60" y="540" font-size="12.5" fill="#4a4a4a">真実の源を構造化された1個のモデルに置く。ER図・SQL・TS型・責</text>
+  <text x="60" y="560" font-size="12.5" fill="#4a4a4a">務マップは すべてそのモデルへの投影とする。どのビューを編集してもモデル</text>
+  <text x="60" y="580" font-size="12.5" fill="#4a4a4a">を経由するので、 2つの真実を同期させる必要がなく、コンフリクトが原理的</text>
+  <rect x="460" y="514" width="420" height="118" rx="8" fill="#fff" stroke="#e5ddd2"/>
+  <text x="480" y="540" font-size="13" fill="#5a5248" font-weight="700">帰結 ─ 引き受けたトレードオフ</text>
+  <text x="480" y="560" font-size="12.5" fill="#4a4a4a">・モデルのスキーマ定義(型・制約・RLS等を保持)を先に固める必要がある</text>
+  <text x="480" y="580" font-size="12.5" fill="#4a4a4a">・逆方向(GUIやSQLでの編集→モデル)はパーサを1枚噛ませて集約する</text>
+  <text x="480" y="600" font-size="12.5" fill="#4a4a4a">・RLS/index/check/default等、図に載らない情報もモデルには全て持たせる</text>
+</svg>

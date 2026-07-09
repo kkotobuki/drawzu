@@ -1,0 +1,47 @@
+<svg viewBox="0 0 920 660" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif">
+  <rect width="920" height="660" fill="#faf9f7"/>
+  <text x="40" y="48" font-size="13" fill="#9a8f80" letter-spacing="2">ADR-0002 · 設計判断の地図</text>
+  <text x="40" y="80" font-size="24" font-weight="700" fill="#2a2a2a">model-first の薄いMCPを自作し、ER図エディタ本体は作らない</text>
+  <line x1="40" y1="98" x2="880" y2="98" stroke="#e5ddd2" stroke-width="1.5"/>
+  <text x="40" y="128" font-size="13" fill="#7a7266" font-weight="600">CONTEXT</text>
+  <text x="40" y="152" font-size="14" fill="#3a3a3a">図↔SQLのビジュアルエディタは drawDB/ChartDB/Azimutt 等で既に成熟・コモディティ化。 一方「ER図エディタ × MCP」は未成熟で、drawDB公式は未対応(Issue #992)、 コミュニティfork(drawdb-mcp)はGUIをリモコン操作するGUI-first方式。 どこを作り、どこを借りるかを決める。</text>
+  <text x="40" y="212" font-size="13" fill="#7a7266" font-weight="600">DECISION MATRIX ─ 選択肢 × 評価軸</text>
+    <text x="373" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">新規性・差別化</text>
+    <text x="518" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">実装コスト</text>
+    <text x="663" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">思想適合</text>
+    <text x="808" y="248" text-anchor="middle" font-size="12.5" fill="#5a5248">拡張性</text>
+  <rect x="40" y="300" width="840" height="70" rx="8" fill="#f2ede5"/>
+    
+    <text x="60" y="332" font-size="15" font-weight="700" fill="#8a8276">選択肢 A</text>
+    <text x="60" y="352" font-size="11.5" fill="#9a8f80">GUI+エディタ+MCPをフルスタックで自作</text>
+    <text x="373" y="342" text-anchor="middle" font-size="18" fill="#b06a4a">△</text>
+    <text x="518" y="342" text-anchor="middle" font-size="18" fill="#c25c4a">✕</text>
+    <text x="663" y="342" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+    <text x="808" y="342" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+  <rect x="40" y="380" width="840" height="70" rx="8" fill="#e3efe8" stroke="#2d6a4f" stroke-width="2"/>
+    <rect x="40" y="380" width="6" height="70" rx="3" fill="#2d6a4f"/>
+    <text x="60" y="412" font-size="15" font-weight="700" fill="#2d6a4f">選択肢 B ✓</text>
+    <text x="60" y="432" font-size="11.5" fill="#4a7a60">model-firstの薄いMCPを自作 / GUIは既存OSSを窓として借りる</text>
+    <text x="373" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="518" y="422" text-anchor="middle" font-size="18" fill="#3a8a63">◯</text>
+    <text x="663" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="808" y="422" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+  <rect x="40" y="460" width="840" height="70" rx="8" fill="#f2ede5"/>
+    
+    <text x="60" y="492" font-size="15" font-weight="700" fill="#8a8276">選択肢 C</text>
+    <text x="60" y="512" font-size="11.5" fill="#9a8f80">既存の drawdb-mcp fork をそのまま使う</text>
+    <text x="373" y="502" text-anchor="middle" font-size="18" fill="#c25c4a">✕</text>
+    <text x="518" y="502" text-anchor="middle" font-size="18" fill="#2d6a4f">◎</text>
+    <text x="663" y="502" text-anchor="middle" font-size="18" fill="#c25c4a">✕</text>
+    <text x="808" y="502" text-anchor="middle" font-size="18" fill="#b06a4a">△</text>
+  <text x="40" y="500" font-size="13" fill="#7a7266" font-weight="600">なぜこの決定か ─ 決め手：思想適合</text>
+  <rect x="40" y="514" width="400" height="118" rx="8" fill="#fff" stroke="#e5ddd2"/>
+  <text x="60" y="540" font-size="12.5" fill="#4a4a4a">ビジュアルER図エディタは車輪の再発明になるので作らない。作るのは、</text>
+  <text x="60" y="560" font-size="12.5" fill="#4a4a4a">ADR-0001の モデルを真実の源として保持し、SQL/ER図/TS型</text>
+  <text x="60" y="580" font-size="12.5" fill="#4a4a4a">/責務マップへ投影し、実DBからintrospectする 「model-</text>
+  <rect x="460" y="514" width="420" height="118" rx="8" fill="#fff" stroke="#e5ddd2"/>
+  <text x="480" y="540" font-size="13" fill="#5a5248" font-weight="700">帰結 ─ 引き受けたトレードオフ</text>
+  <text x="480" y="560" font-size="12.5" fill="#4a4a4a">・モデルのスキーマ(ADR-0001)がこのMCPの心臓部になる。ここの設計が全て</text>
+  <text x="480" y="580" font-size="12.5" fill="#4a4a4a">・既存GUIとの接続I/F(モデル⇔DBML/JSON)を1枚用意する必要がある</text>
+  <text x="480" y="600" font-size="12.5" fill="#4a4a4a">・read中心で開始し、write(モデル変更)は段階的に。GUI-firstのfork群とは逆張り</text>
+</svg>

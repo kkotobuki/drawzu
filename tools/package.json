@@ -1,0 +1,13 @@
+{
+  "name": "drawzu-tools",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "ADR.md のフロントマターから設計判断の地図(SVG)を決定的に生成する",
+  "scripts": {
+    "adr2svg": "node adr2svg.mjs"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

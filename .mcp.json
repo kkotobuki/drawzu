@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "drawzu": {
+      "command": "npx",
+      "args": ["tsx", "server/mcp.ts"]
+    }
+  }
+}
