@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { COLUMN_TYPES, type Column, type Index, type Table } from "../../core/model.ts";
+import { COLUMN_TYPES, type Column, type Index, type Model, type Table } from "../../core/model.ts";
 import type { Op } from "../../core/ops.ts";
 import { toSQL } from "../../core/sql.ts";
 import { uid, useModel } from "./useModel.ts";
@@ -57,6 +57,7 @@ export function App() {
   const [flash, setFlash] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
+  const [permOpen, setPermOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(() => localStorage.getItem("drawzu.help") !== "closed");
   const toggleHelp = () => {
     setShowHelp((v) => {
@@ -286,6 +287,10 @@ export function App() {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setPermOpen(true)}
+            style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
+            🛡 権限マップ
+          </button>
           <button onClick={() => setBulkOpen(true)}
             style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
             ⇥ 洗い出し
@@ -423,6 +428,88 @@ export function App() {
           </div>
         </div>
       )}
+      {permOpen && <PermMatrix model={model} onClose={() => setPermOpen(false)} />}
+    </div>
+  );
+}
+
+/** 権限マップ: モデルのRLSポリシーから「どのテーブルの何を・誰ができるか」を自動生成する投影 */
+function PermMatrix({ model, onClose }: { model: Model; onClose: () => void }) {
+  const CMDS = ["select", "insert", "update", "delete"] as const;
+  const CMD_LABEL: Record<string, string> = { select: "読む", insert: "入れる", update: "書換", delete: "消す" };
+
+  const cell = (t: Table, c: string) => {
+    if (!t.rlsEnabled) {
+      return <span title="RLSが無効なので、テーブルに触れるロール全員が全行を操作できる"
+        style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fef3c7", padding: "2px 7px", borderRadius: 4 }}>開放</span>;
+    }
+    const pols = t.rls.filter((p) => p.command === c || p.command === "all");
+    if (pols.length === 0) {
+      return <span title="この操作を許可するポリシーが無い = 誰もできない" style={{ fontSize: 11, color: "#c8ccd4" }}>✕</span>;
+    }
+    const color = CMD_COLOR[c] ?? rlsColor;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "flex-start" }}>
+        {pols.map((p) => (
+          <span key={p.id}
+            title={`${p.command === "all" ? "[ALLポリシー] " : ""}using: ${p.using ?? "—"}\nwith check: ${p.withCheck ?? "—"}`}
+            style={{ fontSize: 10, color, background: `${color}14`, padding: "2px 7px", borderRadius: 4,
+              maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              border: p.command === "all" ? `1px dashed ${color}66` : "1px solid transparent" }}>
+            {p.name}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(20,24,33,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+      <div style={{ width: 980, maxWidth: "94vw", maxHeight: "84vh", background: "#fff", borderRadius: 14,
+        boxShadow: "0 18px 50px rgba(20,24,33,0.35)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>🛡 権限マップ</div>
+            <div style={{ fontSize: 11.5, color: sub, marginTop: 3 }}>
+              モデルの RLS ポリシーから自動生成（図・SQLと同じモデルのもう1つの投影）。セルにホバーすると条件式が見える。
+              点線枠は ALL ポリシー由来。
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#c0c4cc", fontSize: 14, padding: 4 }}>✕</button>
+        </div>
+        <div style={{ overflow: "auto", padding: "0 20px 20px" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", fontSize: 10.5, color: sub, fontWeight: 700, padding: "8px 10px", borderBottom: `2px solid ${line}`, position: "sticky", top: 0, background: "#fff" }}>テーブル</th>
+                {CMDS.map((c) => (
+                  <th key={c} style={{ textAlign: "left", fontSize: 10.5, fontWeight: 800, color: CMD_COLOR[c], padding: "8px 10px", borderBottom: `2px solid ${line}`, position: "sticky", top: 0, background: "#fff" }}>
+                    {c.toUpperCase()} <span style={{ color: sub, fontWeight: 500 }}>{CMD_LABEL[c]}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {model.tables.map((t) => (
+                <tr key={t.id}>
+                  <td style={{ padding: "7px 10px", borderBottom: `1px solid ${line}`, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", verticalAlign: "top" }}>
+                    {t.name}
+                    {!t.rlsEnabled && <span style={{ marginLeft: 6, fontSize: 9, color: "#b45309" }}>RLS無効</span>}
+                  </td>
+                  {CMDS.map((c) => (
+                    <td key={c} style={{ padding: "7px 10px", borderBottom: `1px solid ${line}`, verticalAlign: "top" }}>{cell(t, c)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11, color: sub, marginTop: 10, lineHeight: 1.6 }}>
+            <b>読み方</b>: ✕ = 許可するポリシーが無い（誰もできない） / <span style={{ color: "#b45309" }}>開放</span> = RLS無効で全行に触れる ／
+            チップ = その操作を許可するポリシー（名前が「誰ができるか」を表すように命名する）。
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -511,9 +598,50 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
           <Term word="正規化">「同じ事実は1箇所にだけ書く」への言い換え。重複が無ければ、更新漏れによる食い違いが起きない。</Term>
           <Term word="インデックス（⌗）">本の索引と同じ。検索は速くなるが、書き込みのたびに索引も更新されるので少し遅くなる。</Term>
           <Term word="unique / not null / default">重複禁止 / 空禁止 / 未指定時の値。ルールはアプリでなく DB に守らせるのが鉄則（アプリは書き間違えるが DB は必ず守る）。</Term>
-          <Term word="SELECT / INSERT / UPDATE / DELETE / ALL">DBへの操作を表す SQL の4動詞（読む / 入れる / 書き換える / 消す ＝ CRUD）。RLSポリシーのコマンドもこの語彙で、<b>ALL は「4つ全部」の省略記法</b>（オーナーのように全部許す相手に使う）。drawzu 独自の言葉ではなく、どの DB でも通じる標準語。</Term>
+          <Term word="SELECT / INSERT / UPDATE / DELETE / ALL">DBへの操作を表す SQL の4動詞（読む / 入れる / 書き換える / 消す ＝ CRUD）。RLSポリシーのコマンドもこの語彙で、<b>ALL は「4つ全部」の省略記法</b>。drawzu 独自の言葉ではなく、どの DB でも通じる標準語。閲覧者/編集者/オーナーで例にするとこう:</Term>
+          <table style={{ borderCollapse: "collapse", fontSize: 9.5, margin: "2px 0 10px", width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={{ border: `1px solid ${line}`, padding: "3px 5px", background: "#fafbfc" }}></th>
+                {(["select", "insert", "update", "delete"] as const).map((c) => (
+                  <th key={c} style={{ border: `1px solid ${line}`, padding: "3px 4px", color: CMD_COLOR[c], fontWeight: 800, background: "#fafbfc" }}>
+                    {c.toUpperCase().slice(0, 3)}<div style={{ fontWeight: 500, color: sub }}>{{ select: "読む", insert: "入れる", update: "書換", delete: "消す" }[c]}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                ["閲覧者", [true, false, false, false]],
+                ["編集者", [true, true, true, false]],
+                ["オーナー = ALL", [true, true, true, true]],
+              ] as [string, boolean[]][]).map(([role, cells]) => (
+                <tr key={role}>
+                  <td style={{ border: `1px solid ${line}`, padding: "3px 6px", fontWeight: 700, whiteSpace: "nowrap" }}>{role}</td>
+                  {cells.map((ok, i) => (
+                    <td key={i} style={{ border: `1px solid ${line}`, padding: "3px 4px", textAlign: "center", color: ok ? "#059669" : "#c8ccd4", fontWeight: 700 }}>
+                      {ok ? "✓" : "✕"}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
           <Term word="RLS">行単位のアクセス制御。「このテーブルは読めるが、自分の行だけ」ができる。条件に合わない行は<b>エラーでなく「存在しない」ように見える</b>（0行が返るだけ）。Supabase では実質必須。</Term>
-          <Term word="GRANT と RLS の違い">どちらも門番だが粒度が違う。GRANT は<b>テーブル単位</b>（このテーブルに SELECT していいか）、RLS は<b>行単位</b>（SELECT していいのは<b>どの行</b>か）。Supabase では GRANT 側は設定済みなので、開発者が書くのは実質 RLS だけ。</Term>
+          <Term word="GRANT と RLS の違い">どちらも門番だが粒度が違う。門は二段になっている:</Term>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9.5, margin: "2px 0 4px", flexWrap: "wrap" }}>
+            <span style={{ color: sub }}>リクエスト</span>
+            <span style={{ color: "#c8ccd4" }}>→</span>
+            <span style={{ border: `1px solid ${line}`, borderRadius: 5, padding: "3px 6px", background: "#fafbfc" }}>🚪 <b>GRANT</b><br /><span style={{ color: sub }}>テーブルに入れるか</span></span>
+            <span style={{ color: "#c8ccd4" }}>→</span>
+            <span style={{ border: `1px solid ${rlsColor}55`, borderRadius: 5, padding: "3px 6px", background: `${rlsColor}0a` }}>🚪 <b style={{ color: rlsColor }}>RLS</b><br /><span style={{ color: sub }}>どの行を見せるか</span></span>
+            <span style={{ color: "#c8ccd4" }}>→</span>
+            <span style={{ color: sub }}>許された行だけ返る</span>
+          </div>
+          <div style={{ fontSize: 11.5, lineHeight: 1.6, color: "#4b5261", marginBottom: 8 }}>
+            Supabase では GRANT 側（1段目）は設定済みなので、開発者が書くのは実質 RLS（2段目）だけ。
+            いまのモデルで「どのテーブルの何を誰ができるか」は、上部の <b>🛡 権限マップ</b> ボタンで一覧できる。
+          </div>
           <Term word="using / with check">ポリシーの2つの条件式。<b>using は「既にある行を見る/触る条件」</b>、<b>with check は「これから入れる行が満たすべき条件」</b>。だから INSERT のポリシーは with check 側に書く（UPDATE は両方）。</Term>
           <Term word="migration">DB への変更履歴をSQLファイルで積み上げる運用。最初の1回はこの図のSQLをそのまま流せばよい。</Term>
         </>
@@ -550,6 +678,7 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
       <Row icon="🛡">ヘッダの <b>RLS バッジ</b>が紫=有効 / グレー=無効。クリックで切替</Row>
       <Row icon="▨">有効なテーブルは下部にポリシー一覧（SELECT=青 / INSERT=緑 / UPDATE=橙 / DELETE=赤 / ALL=紫）。ホバーで using / with check の式が見える</Row>
       <Row icon="⚠">「有効なのにポリシー0件」は全アクセス拒否になるので警告が出る。ポリシーの中身の編集は AI（patch_model）経由で</Row>
+      <Row icon="🛡">上部の「<b>権限マップ</b>」で、全テーブル × 4動詞 × ポリシーの一覧表が見られる（モデルからの自動生成）</Row>
 
       <H>SQL</H>
       <Row icon="▤">右パネルに常に最新の DDL（FK・index・RLS 込み）。「コピー」でそのまま Supabase 等に貼れる</Row>
