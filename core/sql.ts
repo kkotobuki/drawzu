@@ -62,6 +62,9 @@ export function toSQL(model: Model): string {
       if (p.using != null) s += `\n  using (${p.using})`;
       if (p.withCheck != null) s += `\n  with check (${p.withCheck})`;
       stmts.push(s + ";");
+      if (p.audience.length > 0) {
+        stmts.push(`comment on policy "${p.name}" on "${t.name}" is '${esc(`対象: ${p.audience.join(" / ")}`)}';`);
+      }
     }
     return [stmts.join("\n")];
   });

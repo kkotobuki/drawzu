@@ -54,6 +54,8 @@ server.tool(
     '- {"type":"ADD_INDEX","tableId","index":{id,name,columns:[カラムid],unique}} / UPDATE_INDEX / DELETE_INDEX',
     '- {"type":"SET_MODEL","model":{modelVersion:1,tables:[...]}} … introspect結果の一括流し込み・全置換用',
     "規約: id は自分で採番する（テーブル t_<name>、カラム c_<name>_<col>、インデックス i_<name>_n 推奨）。",
+    'RLSポリシーの形: {id,name,command:"select|insert|update|delete|all",roles:["authenticated"等],using,withCheck,audience:[...]}。',
+    'audience は「このポリシーで許可される相手」の表示ラベル（例:["閲覧者","編集者"]/["オーナー"]/["本人"]）。図の権限×操作表の行になるので必ず付けること。name も「編集者はモデルを更新可」のように誰が何をできるかが分かる日本語にする。',
     "FK は {tableId} で参照先テーブルを指す（参照先カラムは相手のPK）。インデックスの columns はカラム名でなくカラム id。",
     "型は uuid/text/varchar/int8/int4/numeric/boolean/timestamptz/date/jsonb。",
     "座標 x,y はER図上の配置。新規テーブルは既存と重ならない位置に置くこと（カード幅248px、高さ約40+行数×30px）。",

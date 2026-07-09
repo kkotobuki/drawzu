@@ -11,8 +11,10 @@ const CARD_W = 248;
 const HEADER_H = 40;
 const ROW_H = 30;
 const IDX_ROW_H = 24;
-/** RLSミニ表（4動詞の✓✕ストリップ）の固定高さ */
+/** RLS表示の高さ（警告/無効バッジは固定、権限×動詞の表は権限の行数で決まる） */
 const RLS_STRIP_H = 30;
+const RLS_HEAD_H = 15;
+const RLS_AUD_ROW_H = 17;
 /** メモ欄の固定高さ。可変にするとFK線の座標計算がDOM計測依存になるため固定 */
 const MEMO_H = 46;
 
@@ -29,8 +31,20 @@ function memoHeight(t: Table) {
 function idxSectionHeight(t: Table) {
   return t.indexes.length > 0 ? t.indexes.length * IDX_ROW_H + 8 : 0;
 }
+/** テーブルのポリシーに登場する権限ラベル（表の行）。ラベル未設定のポリシーは「その他」に寄せる */
+function rlsAudiences(t: Table): string[] {
+  const seen: string[] = [];
+  for (const p of t.rls) {
+    for (const a of p.audience.length > 0 ? p.audience : ["その他"]) {
+      if (!seen.includes(a)) seen.push(a);
+    }
+  }
+  return seen;
+}
 function rlsSectionHeight(t: Table) {
-  return t.rlsEnabled || t.rls.length > 0 ? RLS_STRIP_H : 0;
+  if (!t.rlsEnabled) return t.rls.length > 0 ? RLS_STRIP_H : 0;
+  if (t.rls.length === 0) return RLS_STRIP_H;
+  return 10 + RLS_HEAD_H + rlsAudiences(t).length * RLS_AUD_ROW_H;
 }
 function tableHeight(t: Table) {
   return HEADER_H + memoHeight(t) + t.columns.length * ROW_H + idxSectionHeight(t) + rlsSectionHeight(t) + 34;
@@ -865,32 +879,58 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
         </div>
       )}
 
-      {/* RLSミニ表（権限マップのこのテーブルの行と同じ内容。詳細はホバーと権限マップで） */}
-      {(t.rlsEnabled || t.rls.length > 0) && (
-        <div style={{ borderTop: `1px solid ${line}`, height: RLS_STRIP_H, display: "flex", alignItems: "center",
-          gap: 4, padding: "0 10px", background: `${rlsColor}08` }}>
-          {!t.rlsEnabled ? (
-            <span title={`RLSが無効なので、テーブルに触れるロール全員が全行を操作できる${t.rls.length ? `（定義済みポリシー${t.rls.length}件は休眠中）` : ""}`}
-              style={{ fontSize: 9.5, fontWeight: 700, color: "#b45309", background: "#fef3c7", padding: "3px 8px", borderRadius: 4 }}>
-              RLS無効 — 全行に触れる状態
-            </span>
-          ) : (
-            (["select", "insert", "update", "delete"] as const).map((c) => {
-              const pols = t.rls.filter((p) => p.command === c || p.command === "all");
-              const ok = pols.length > 0;
-              const color = CMD_COLOR[c];
-              return (
-                <span key={c}
-                  title={ok
-                    ? pols.map((p) => `${p.command === "all" ? "[ALL] " : ""}${p.name}\n  using: ${p.using ?? "—"}${p.withCheck ? `\n  with check: ${p.withCheck}` : ""}`).join("\n")
-                    : `${c.toUpperCase()} を許可するポリシーが無い = 誰もできない`}
-                  style={{ flex: 1, textAlign: "center", fontSize: 8.5, fontWeight: 800, letterSpacing: "0.02em",
-                    lineHeight: 1, padding: "4px 0", borderRadius: 4, cursor: "default",
-                    color: ok ? color : "#c0c4cc", background: ok ? `${color}14` : "#f4f5f7" }}>
-                  {{ select: "SEL", insert: "INS", update: "UPD", delete: "DEL" }[c]} {ok ? "✓" : "✕"}
+      {/* RLS: 権限（audience）×4動詞 の表。「どの権限がどの操作をできるか」をカード上で示す */}
+      {rlsSectionHeight(t) > 0 && (
+        <div style={{ borderTop: `1px solid ${line}`, height: rlsSectionHeight(t), background: `${rlsColor}08`, overflow: "hidden" }}>
+          {!t.rlsEnabled || t.rls.length === 0 ? (
+            <div style={{ height: "100%", display: "flex", alignItems: "center", padding: "0 10px" }}>
+              {!t.rlsEnabled ? (
+                <span title={`RLSが無効なので、テーブルに触れるロール全員が全行を操作できる${t.rls.length ? `（定義済みポリシー${t.rls.length}件は休眠中）` : ""}`}
+                  style={{ fontSize: 9.5, fontWeight: 700, color: "#b45309", background: "#fef3c7", padding: "3px 8px", borderRadius: 4 }}>
+                  RLS無効 — 全行に触れる状態
                 </span>
-              );
-            })
+              ) : (
+                <span title="RLSを有効にするとポリシーで許可した行しか見えなくなる。0件のままだと誰も読み書きできない"
+                  style={{ fontSize: 9.5, fontWeight: 700, color: "#b45309" }}>
+                  ⚠ ポリシー未定義 — 全アクセス拒否
+                </span>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: "5px 8px 0" }}>
+              <div style={{ display: "flex", gap: 3, height: RLS_HEAD_H, alignItems: "center" }}>
+                <span style={{ width: 62, flexShrink: 0, fontSize: 8, fontWeight: 700, color: rlsColor }}>🛡 権限</span>
+                {(["select", "insert", "update", "delete"] as const).map((c) => (
+                  <span key={c} style={{ flex: 1, textAlign: "center", fontSize: 8, fontWeight: 800, color: CMD_COLOR[c], letterSpacing: "0.02em" }}>
+                    {{ select: "SEL", insert: "INS", update: "UPD", delete: "DEL" }[c]}
+                  </span>
+                ))}
+              </div>
+              {rlsAudiences(t).map((aud) => (
+                <div key={aud} style={{ display: "flex", gap: 3, height: RLS_AUD_ROW_H, alignItems: "center" }}>
+                  <span style={{ width: 62, flexShrink: 0, fontSize: 9, fontWeight: 700, color: "#4b5261",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{aud}</span>
+                  {(["select", "insert", "update", "delete"] as const).map((c) => {
+                    const pols = t.rls.filter((p) =>
+                      (p.command === c || p.command === "all") &&
+                      (p.audience.length > 0 ? p.audience : ["その他"]).includes(aud)
+                    );
+                    const ok = pols.length > 0;
+                    return (
+                      <span key={c}
+                        title={ok
+                          ? pols.map((p) => `${p.command === "all" ? "[ALL] " : ""}${p.name}\n  using: ${p.using ?? "—"}${p.withCheck ? `\n  with check: ${p.withCheck}` : ""}`).join("\n")
+                          : `「${aud}」に ${c.toUpperCase()} を許可するポリシーは無い`}
+                        style={{ flex: 1, textAlign: "center", fontSize: 9.5, fontWeight: 800, lineHeight: "15px",
+                          borderRadius: 3, cursor: "default",
+                          color: ok ? CMD_COLOR[c] : "#d4d7dd", background: ok ? `${CMD_COLOR[c]}12` : "transparent" }}>
+                        {ok ? "✓" : "✕"}
+                      </span>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

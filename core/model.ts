@@ -43,6 +43,9 @@ export const RlsPolicySchema = z.object({
   roles: z.array(z.string()).default([]),
   using: z.string().nullable().default(null),
   withCheck: z.string().nullable().default(null),
+  /** このポリシーで許可される相手の人間向けラベル（例: 閲覧者/編集者/オーナー/本人）。
+      Postgresの roles とは別物で、図の「権限×操作」表の行になる */
+  audience: z.array(z.string()).default([]),
 });
 
 export const IndexSchema = z.object({
@@ -67,11 +70,21 @@ export const TableSchema = z.object({
   comment: z.string().nullable().default(null),
 });
 
-export const ModelSchema = z.object({
-  /** モデル自体のスキーマ版数。構造を変えたら上げてマイグレーションを書く */
-  modelVersion: z.literal(1),
-  tables: z.array(TableSchema).default([]),
-});
+export const ModelSchema = z
+  .object({
+    /** モデル自体のスキーマ版数。構造を変えたら上げてマイグレーションを書く */
+    modelVersion: z.literal(1),
+    tables: z.array(TableSchema).default([]),
+  })
+  .superRefine((m, ctx) => {
+    const seen = new Set<string>();
+    for (const t of m.tables) {
+      if (seen.has(t.id)) {
+        ctx.addIssue({ code: "custom", message: `テーブル id が重複しています: ${t.id}` });
+      }
+      seen.add(t.id);
+    }
+  });
 
 export type ForeignKey = z.infer<typeof ForeignKeySchema>;
 export type Column = z.infer<typeof ColumnSchema>;

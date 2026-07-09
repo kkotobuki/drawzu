@@ -51,7 +51,11 @@ export type Op = z.infer<typeof OpSchema>;
 export function applyOp(model: Model, op: Op): Model {
   switch (op.type) {
     case "ADD_TABLE":
-      return { ...model, tables: [...model.tables, op.table] };
+      // 同idが既にあれば置き換え(upsert)。idの重複した2つのテーブルが並ぶ事故を防ぐ
+      return {
+        ...model,
+        tables: [...model.tables.filter((t) => t.id !== op.table.id), op.table],
+      };
 
     case "DELETE_TABLE":
       return {
