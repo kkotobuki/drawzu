@@ -11,7 +11,8 @@ const CARD_W = 248;
 const HEADER_H = 40;
 const ROW_H = 30;
 const IDX_ROW_H = 24;
-const RLS_ROW_H = 22;
+/** RLSミニ表（4動詞の✓✕ストリップ）の固定高さ */
+const RLS_STRIP_H = 30;
 /** メモ欄の固定高さ。可変にするとFK線の座標計算がDOM計測依存になるため固定 */
 const MEMO_H = 46;
 
@@ -28,12 +29,8 @@ function memoHeight(t: Table) {
 function idxSectionHeight(t: Table) {
   return t.indexes.length > 0 ? t.indexes.length * IDX_ROW_H + 8 : 0;
 }
-function rlsRows(t: Table) {
-  // 有効なのにポリシー0件は「全アクセス拒否」の警告1行を出す
-  return t.rls.length + (t.rlsEnabled && t.rls.length === 0 ? 1 : 0);
-}
 function rlsSectionHeight(t: Table) {
-  return rlsRows(t) > 0 ? rlsRows(t) * RLS_ROW_H + 8 : 0;
+  return t.rlsEnabled || t.rls.length > 0 ? RLS_STRIP_H : 0;
 }
 function tableHeight(t: Table) {
   return HEADER_H + memoHeight(t) + t.columns.length * ROW_H + idxSectionHeight(t) + rlsSectionHeight(t) + 34;
@@ -676,8 +673,8 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
 
       <H>RLS（行アクセス制御）</H>
       <Row icon="🛡">ヘッダの <b>RLS バッジ</b>が紫=有効 / グレー=無効。クリックで切替</Row>
-      <Row icon="▨">有効なテーブルは下部にポリシー一覧（SELECT=青 / INSERT=緑 / UPDATE=橙 / DELETE=赤 / ALL=紫）。ホバーで using / with check の式が見える</Row>
-      <Row icon="⚠">「有効なのにポリシー0件」は全アクセス拒否になるので警告が出る。ポリシーの中身の編集は AI（patch_model）経由で</Row>
+      <Row icon="▨">有効なテーブルは下部に <b>SEL / INS / UPD / DEL の ✓✕ ミニ表</b>（SELECT=青 / INSERT=緑 / UPDATE=橙 / DELETE=赤）。ホバーでポリシー名と using / with check の式が見える</Row>
+      <Row icon="⚠">全部 ✕ のテーブルは「有効なのにポリシー0件 = 誰もアクセスできない」状態。ポリシーの中身の編集は AI（patch_model）経由で</Row>
       <Row icon="🛡">上部の「<b>権限マップ</b>」で、全テーブル × 4動詞 × ポリシーの一覧表が見られる（モデルからの自動生成）</Row>
 
       <H>SQL</H>
@@ -868,31 +865,32 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
         </div>
       )}
 
-      {/* RLS（図に載らない情報の可視化 = drawzu の differentiator） */}
-      {rlsRows(t) > 0 && (
-        <div style={{ borderTop: `1px solid ${line}`, padding: "4px 0", background: `${rlsColor}08` }}>
-          {t.rls.map((p) => {
-            const c = CMD_COLOR[p.command] ?? rlsColor;
-            return (
-              <div key={p.id}
-                title={`using: ${p.using ?? "—"}\nwith check: ${p.withCheck ?? "—"}\nroles: ${p.roles.length ? p.roles.join(", ") : "（全ロール）"}`}
-                style={{ height: RLS_ROW_H, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 6,
-                  opacity: t.rlsEnabled ? 1 : 0.45 }}>
-                <span style={{ flexShrink: 0, fontSize: 8.5, fontWeight: 800, letterSpacing: "0.03em", lineHeight: 1,
-                  color: c, background: `${c}18`, padding: "2.5px 5px", borderRadius: 4, width: 44, textAlign: "center" }}>
-                  {p.command.toUpperCase()}
+      {/* RLSミニ表（権限マップのこのテーブルの行と同じ内容。詳細はホバーと権限マップで） */}
+      {(t.rlsEnabled || t.rls.length > 0) && (
+        <div style={{ borderTop: `1px solid ${line}`, height: RLS_STRIP_H, display: "flex", alignItems: "center",
+          gap: 4, padding: "0 10px", background: `${rlsColor}08` }}>
+          {!t.rlsEnabled ? (
+            <span title={`RLSが無効なので、テーブルに触れるロール全員が全行を操作できる${t.rls.length ? `（定義済みポリシー${t.rls.length}件は休眠中）` : ""}`}
+              style={{ fontSize: 9.5, fontWeight: 700, color: "#b45309", background: "#fef3c7", padding: "3px 8px", borderRadius: 4 }}>
+              RLS無効 — 全行に触れる状態
+            </span>
+          ) : (
+            (["select", "insert", "update", "delete"] as const).map((c) => {
+              const pols = t.rls.filter((p) => p.command === c || p.command === "all");
+              const ok = pols.length > 0;
+              const color = CMD_COLOR[c];
+              return (
+                <span key={c}
+                  title={ok
+                    ? pols.map((p) => `${p.command === "all" ? "[ALL] " : ""}${p.name}\n  using: ${p.using ?? "—"}${p.withCheck ? `\n  with check: ${p.withCheck}` : ""}`).join("\n")
+                    : `${c.toUpperCase()} を許可するポリシーが無い = 誰もできない`}
+                  style={{ flex: 1, textAlign: "center", fontSize: 8.5, fontWeight: 800, letterSpacing: "0.02em",
+                    lineHeight: 1, padding: "4px 0", borderRadius: 4, cursor: "default",
+                    color: ok ? color : "#c0c4cc", background: ok ? `${color}14` : "#f4f5f7" }}>
+                  {{ select: "SEL", insert: "INS", update: "UPD", delete: "DEL" }[c]} {ok ? "✓" : "✕"}
                 </span>
-                <span style={{ fontSize: 10.5, color: "#4b5261", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
-                  {p.name}
-                </span>
-              </div>
-            );
-          })}
-          {t.rlsEnabled && t.rls.length === 0 && (
-            <div style={{ height: RLS_ROW_H, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 6 }}
-              title="RLSを有効にするとポリシーで許可した行しか見えなくなる。0件のままだと誰も読み書きできない">
-              <span style={{ fontSize: 10.5, color: "#b45309", fontWeight: 600 }}>⚠ ポリシー未定義 — 全アクセス拒否の状態</span>
-            </div>
+              );
+            })
           )}
         </div>
       )}
