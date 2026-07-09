@@ -11,10 +11,16 @@ const CARD_W = 248;
 const HEADER_H = 40;
 const ROW_H = 30;
 const IDX_ROW_H = 24;
+const RLS_ROW_H = 22;
 /** メモ欄の固定高さ。可変にするとFK線の座標計算がDOM計測依存になるため固定 */
 const MEMO_H = 46;
 
 const ink = "#232a36", sub = "#6b7280", line = "#e3e5ea", accent = "#4f5bd5", pkColor = "#b7791f";
+const rlsColor = "#7c3aed";
+/** RLSポリシーのコマンド別の色（select=青 / insert=緑 / update=橙 / delete=赤 / all=紫） */
+const CMD_COLOR: Record<string, string> = {
+  select: "#2563eb", insert: "#059669", update: "#d97706", delete: "#dc2626", all: rlsColor,
+};
 
 function memoHeight(t: Table) {
   return t.comment != null ? MEMO_H : 0;
@@ -22,8 +28,15 @@ function memoHeight(t: Table) {
 function idxSectionHeight(t: Table) {
   return t.indexes.length > 0 ? t.indexes.length * IDX_ROW_H + 8 : 0;
 }
+function rlsRows(t: Table) {
+  // 有効なのにポリシー0件は「全アクセス拒否」の警告1行を出す
+  return t.rls.length + (t.rlsEnabled && t.rls.length === 0 ? 1 : 0);
+}
+function rlsSectionHeight(t: Table) {
+  return rlsRows(t) > 0 ? rlsRows(t) * RLS_ROW_H + 8 : 0;
+}
 function tableHeight(t: Table) {
-  return HEADER_H + memoHeight(t) + t.columns.length * ROW_H + idxSectionHeight(t) + 34;
+  return HEADER_H + memoHeight(t) + t.columns.length * ROW_H + idxSectionHeight(t) + rlsSectionHeight(t) + 34;
 }
 /** カラム行の縦中心（キャンバス座標）。FK線の起点/終点に使う */
 function colY(t: Table, columnId: string) {
@@ -498,7 +511,10 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
           <Term word="正規化">「同じ事実は1箇所にだけ書く」への言い換え。重複が無ければ、更新漏れによる食い違いが起きない。</Term>
           <Term word="インデックス（⌗）">本の索引と同じ。検索は速くなるが、書き込みのたびに索引も更新されるので少し遅くなる。</Term>
           <Term word="unique / not null / default">重複禁止 / 空禁止 / 未指定時の値。ルールはアプリでなく DB に守らせるのが鉄則（アプリは書き間違えるが DB は必ず守る）。</Term>
-          <Term word="RLS">行単位のアクセス制御。「このテーブルは読めるが、自分の行だけ」ができる。Supabase では実質必須。</Term>
+          <Term word="SELECT / INSERT / UPDATE / DELETE / ALL">DBへの操作を表す SQL の4動詞（読む / 入れる / 書き換える / 消す ＝ CRUD）。RLSポリシーのコマンドもこの語彙で、<b>ALL は「4つ全部」の省略記法</b>（オーナーのように全部許す相手に使う）。drawzu 独自の言葉ではなく、どの DB でも通じる標準語。</Term>
+          <Term word="RLS">行単位のアクセス制御。「このテーブルは読めるが、自分の行だけ」ができる。条件に合わない行は<b>エラーでなく「存在しない」ように見える</b>（0行が返るだけ）。Supabase では実質必須。</Term>
+          <Term word="GRANT と RLS の違い">どちらも門番だが粒度が違う。GRANT は<b>テーブル単位</b>（このテーブルに SELECT していいか）、RLS は<b>行単位</b>（SELECT していいのは<b>どの行</b>か）。Supabase では GRANT 側は設定済みなので、開発者が書くのは実質 RLS だけ。</Term>
+          <Term word="using / with check">ポリシーの2つの条件式。<b>using は「既にある行を見る/触る条件」</b>、<b>with check は「これから入れる行が満たすべき条件」</b>。だから INSERT のポリシーは with check 側に書く（UPDATE は両方）。</Term>
           <Term word="migration">DB への変更履歴をSQLファイルで積み上げる運用。最初の1回はこの図のSQLをそのまま流せばよい。</Term>
         </>
       ) : (
@@ -529,6 +545,11 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
       <H>インデックス</H>
       <Row icon="⌗">カード下の「＋ ⌗ index」→ カラム行をクリックして対象を選ぶ（複数可＝複合）→ インデックス名をクリックで確定</Row>
       <Row icon="U">「U」で unique 切替</Row>
+
+      <H>RLS（行アクセス制御）</H>
+      <Row icon="🛡">ヘッダの <b>RLS バッジ</b>が紫=有効 / グレー=無効。クリックで切替</Row>
+      <Row icon="▨">有効なテーブルは下部にポリシー一覧（SELECT=青 / INSERT=緑 / UPDATE=橙 / DELETE=赤 / ALL=紫）。ホバーで using / with check の式が見える</Row>
+      <Row icon="⚠">「有効なのにポリシー0件」は全アクセス拒否になるので警告が出る。ポリシーの中身の編集は AI（patch_model）経由で</Row>
 
       <H>SQL</H>
       <Row icon="▤">右パネルに常に最新の DDL（FK・index・RLS 込み）。「コピー」でそのまま Supabase 等に貼れる</Row>
@@ -591,7 +612,19 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
               style={{ fontSize: 13, fontWeight: 600, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+          <button
+            title={t.rlsEnabled
+              ? `RLS有効（ポリシー${t.rls.length}件）。クリックで無効化`
+              : "RLS無効 — 誰でも全行にアクセスできる状態。クリックで有効化"}
+            onClick={() => edit({ type: "UPDATE_TABLE", id: t.id, patch: { rlsEnabled: !t.rlsEnabled } })}
+            style={{ cursor: "pointer", fontSize: 8.5, fontWeight: 800, letterSpacing: "0.04em", lineHeight: 1,
+              padding: "3px 5px", borderRadius: 5,
+              background: t.rlsEnabled ? rlsColor : "transparent",
+              color: t.rlsEnabled ? "#fff" : "#c0c4cc",
+              border: `1px solid ${t.rlsEnabled ? rlsColor : "#d4d7dd"}` }}>
+            RLS
+          </button>
           <button title={t.comment != null ? "メモを編集" : "メモを追加（何を保存する？何に紐づく？）"}
             onClick={() => setEditingMemo(true)}
             style={{ background: "none", border: "none", cursor: "pointer", padding: 2, fontSize: 11, lineHeight: 1,
@@ -703,6 +736,35 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* RLS（図に載らない情報の可視化 = drawzu の differentiator） */}
+      {rlsRows(t) > 0 && (
+        <div style={{ borderTop: `1px solid ${line}`, padding: "4px 0", background: `${rlsColor}08` }}>
+          {t.rls.map((p) => {
+            const c = CMD_COLOR[p.command] ?? rlsColor;
+            return (
+              <div key={p.id}
+                title={`using: ${p.using ?? "—"}\nwith check: ${p.withCheck ?? "—"}\nroles: ${p.roles.length ? p.roles.join(", ") : "（全ロール）"}`}
+                style={{ height: RLS_ROW_H, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 6,
+                  opacity: t.rlsEnabled ? 1 : 0.45 }}>
+                <span style={{ flexShrink: 0, fontSize: 8.5, fontWeight: 800, letterSpacing: "0.03em", lineHeight: 1,
+                  color: c, background: `${c}18`, padding: "2.5px 5px", borderRadius: 4, width: 44, textAlign: "center" }}>
+                  {p.command.toUpperCase()}
+                </span>
+                <span style={{ fontSize: 10.5, color: "#4b5261", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                  {p.name}
+                </span>
+              </div>
+            );
+          })}
+          {t.rlsEnabled && t.rls.length === 0 && (
+            <div style={{ height: RLS_ROW_H, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 6 }}
+              title="RLSを有効にするとポリシーで許可した行しか見えなくなる。0件のままだと誰も読み書きできない">
+              <span style={{ fontSize: 10.5, color: "#b45309", fontWeight: 600 }}>⚠ ポリシー未定義 — 全アクセス拒否の状態</span>
+            </div>
+          )}
         </div>
       )}
 
