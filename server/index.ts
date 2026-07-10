@@ -67,6 +67,13 @@ const MIME: Record<string, string> = {
 const server = createServer(async (req, res) => {
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
+  // MCPブリッジの生存確認・接続先確認用。root を返すのは「別プロジェクトの
+  // サーバーに誤接続していないか」をブリッジ側で検証できるようにするため
+  if (path === "/api/health") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, root: ROOT, version: hub.version }));
+    return;
+  }
   if (path === "/api/model") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ version: hub.version, model: hub.model }));
