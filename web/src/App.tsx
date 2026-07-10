@@ -3,58 +3,16 @@ import { COLUMN_TYPES, type Column, type Index, type Model, type Table } from ".
 import type { Op } from "../../core/ops.ts";
 import { toSQL } from "../../core/sql.ts";
 import { uid, useModel } from "./useModel.ts";
+import {
+  CARD_W, HEADER_H, ROW_H, IDX_ROW_H, RLS_HEAD_H, RLS_AUD_ROW_H, MEMO_H,
+  ink, sub, line, accent, pkColor, rlsColor, CMD_COLOR,
+  memoHeight, rlsAudiences, rlsSectionHeight, tableHeight, colY, computeFkEdges,
+} from "./layout.ts";
+import { buildExportHtml } from "./exportHtml.ts";
 
 /* prototype/schema-canvas.jsx の移植。真実の源はサーバー上のモデル
-   （.drawzu/model.json）に移り、この画面はそれを映す「人間の窓」。 */
-
-const CARD_W = 248;
-const HEADER_H = 40;
-const ROW_H = 30;
-const IDX_ROW_H = 24;
-/** RLS表示の高さ（警告/無効バッジは固定、権限×動詞の表は権限の行数で決まる） */
-const RLS_STRIP_H = 30;
-const RLS_HEAD_H = 15;
-const RLS_AUD_ROW_H = 17;
-/** メモ欄の固定高さ。可変にするとFK線の座標計算がDOM計測依存になるため固定 */
-const MEMO_H = 46;
-
-const ink = "#232a36", sub = "#6b7280", line = "#e3e5ea", accent = "#4f5bd5", pkColor = "#b7791f";
-const rlsColor = "#7c3aed";
-/** RLSポリシーのコマンド別の色（select=青 / insert=緑 / update=橙 / delete=赤 / all=紫） */
-const CMD_COLOR: Record<string, string> = {
-  select: "#2563eb", insert: "#059669", update: "#d97706", delete: "#dc2626", all: rlsColor,
-};
-
-function memoHeight(t: Table) {
-  return t.comment != null ? MEMO_H : 0;
-}
-function idxSectionHeight(t: Table) {
-  return t.indexes.length > 0 ? t.indexes.length * IDX_ROW_H + 8 : 0;
-}
-/** テーブルのポリシーに登場する権限ラベル（表の行）。ラベル未設定のポリシーは「その他」に寄せる */
-function rlsAudiences(t: Table): string[] {
-  const seen: string[] = [];
-  for (const p of t.rls) {
-    for (const a of p.audience.length > 0 ? p.audience : ["その他"]) {
-      if (!seen.includes(a)) seen.push(a);
-    }
-  }
-  return seen;
-}
-function rlsSectionHeight(t: Table) {
-  if (!t.rlsEnabled) return t.rls.length > 0 ? RLS_STRIP_H : 0;
-  if (t.rls.length === 0) return RLS_STRIP_H;
-  return 10 + RLS_HEAD_H + rlsAudiences(t).length * RLS_AUD_ROW_H;
-}
-function tableHeight(t: Table) {
-  return HEADER_H + memoHeight(t) + t.columns.length * ROW_H + idxSectionHeight(t) + rlsSectionHeight(t) + 34;
-}
-/** カラム行の縦中心（キャンバス座標）。FK線の起点/終点に使う */
-function colY(t: Table, columnId: string) {
-  const i = t.columns.findIndex((c) => c.id === columnId);
-  if (i < 0) return t.y + HEADER_H / 2;
-  return t.y + HEADER_H + memoHeight(t) + 4 + i * ROW_H + ROW_H / 2;
-}
+   （.drawzu/model.json）に移り、この画面はそれを映す「人間の窓」。
+   カード寸法・FK線の座標計算は layout.ts（エクスポートと共有）にある。 */
 
 function newColumn(partial?: Partial<Column>): Column {
   return { id: uid("c"), name: "column", type: "text", pk: false, nullable: true, unique: false, fk: null, default: null, comment: null, ...partial };
@@ -76,7 +34,19 @@ export function App() {
       return !v;
     });
   };
+  /** SQLパネルの開閉。畳むと右端の帯だけ残り、キャンバスが広く使える */
+  const [sqlOpen, setSqlOpen] = useState(() => localStorage.getItem("drawzu.sql") !== "closed");
+  const toggleSql = () => {
+    setSqlOpen((v) => {
+      localStorage.setItem("drawzu.sql", v ? "closed" : "open");
+      return !v;
+    });
+  };
   const [link, setLink] = useState<LinkDrag | null>(null);
+  /** 選択中のFK線（クリックで選択 → Delete / ✕ ボタンで解除）。UIの状態なのでモデルには持たせない */
+  const [selectedEdge, setSelectedEdge] = useState<{ tableId: string; columnId: string } | null>(null);
+  /** ホバー中のテーブル。繋がるFK線だけ濃く見せ、他を薄める（線が多い図でも追えるように） */
+  const [hoverId, setHoverId] = useState<string | null>(null);
   /** キャンバスの視点。x/y はパン量(px)、k は拡大率。UIの状態なのでモデルには持たせない */
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const dragRef = useRef<{ id: string; sx: number; sy: number; ox: number; oy: number; k: number } | null>(null);
@@ -123,6 +93,26 @@ export function App() {
   }, []);
   const edit = useCallback((op: Op) => { act(op); pulse(); }, [act, pulse]);
 
+  const removeFk = useCallback((tableId: string, columnId: string) => {
+    edit({ type: "UPDATE_COLUMN", tableId, columnId, patch: { fk: null } });
+    setSelectedEdge(null);
+  }, [edit]);
+
+  // 選択中のFK線を Delete / Backspace で解除（入力欄にフォーカスがある間は拾わない）
+  useEffect(() => {
+    if (!selectedEdge) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.("input,textarea,select")) return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeFk(selectedEdge.tableId, selectedEdge.columnId);
+      }
+      if (e.key === "Escape") setSelectedEdge(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedEdge, removeFk]);
+
   // 画面座標 → ワールド座標（パン/ズームを打ち消してモデル上の座標にする）
   const canvasPoint = useCallback((ev: { clientX: number; clientY: number }) => {
     const el = canvasRef.current!;
@@ -133,6 +123,7 @@ export function App() {
   /** 背景ドラッグでパン（カード上は各自のハンドラが先に受けるのでここに来ない） */
   const onPanStart = (e: React.MouseEvent) => {
     if (e.target !== e.currentTarget) return;
+    setSelectedEdge(null);
     const sx = e.clientX, sy = e.clientY, ox = view.x, oy = view.y;
     const el = canvasRef.current;
     if (el) el.style.cursor = "grabbing";
@@ -209,6 +200,89 @@ export function App() {
     setBulkOpen(false);
   };
 
+  /** 整列: FKグラフから階層(rank)を作り、参照される側を左・参照する側を右へ並べ直す。
+      結果は MOVE_TABLE でモデルに書き戻す（配置もモデルの一部、という思想のまま） */
+  const autoLayout = () => {
+    const tables = model.tables;
+    if (tables.length < 2) return;
+    const byIdL = Object.fromEntries(tables.map((t) => [t.id, t]));
+    const refs = new Map(tables.map((t) => [
+      t.id,
+      t.columns.filter((c) => c.fk && byIdL[c.fk.tableId] && c.fk.tableId !== t.id).map((c) => c.fk!.tableId),
+    ]));
+    const referenced = new Set([...refs.values()].flat());
+    const placed: { id: string; x: number; y: number }[] = [];
+    const GAP_X = 110, GAP_Y = 44;
+
+    if (referenced.size === 0) {
+      // FKがまだ1本も無い → 素直にグリッド。今の並び（上から・左から）をなるべく保つ
+      const perRow = Math.max(2, Math.ceil(Math.sqrt(tables.length)));
+      const sorted = [...tables].sort((a, b) => a.y - b.y || a.x - b.x);
+      let y = 60;
+      for (let i = 0; i < sorted.length; i += perRow) {
+        const row = sorted.slice(i, i + perRow);
+        row.forEach((t, j) => placed.push({ id: t.id, x: 60 + j * (CARD_W + 48), y }));
+        y += Math.max(...row.map(tableHeight)) + GAP_Y;
+      }
+    } else {
+      // rank = 参照先の最大rank+1（参照する側ほど右）。循環参照はそこで打ち切る
+      const rank = new Map<string, number>();
+      const calc = (id: string, stack: Set<string>): number => {
+        const memo = rank.get(id);
+        if (memo != null) return memo;
+        if (stack.has(id)) return 0;
+        stack.add(id);
+        const r = (refs.get(id) ?? []).reduce((mx, p) => Math.max(mx, calc(p, stack) + 1), 0);
+        stack.delete(id);
+        rank.set(id, r);
+        return r;
+      };
+      tables.forEach((t) => calc(t.id, new Set()));
+      // 孤立テーブル（FKが出ても入ってもいない）は本流に混ぜず最後の列へ
+      const maxRank = Math.max(...rank.values());
+      const isolated = tables.filter((t) => (refs.get(t.id)?.length ?? 0) === 0 && !referenced.has(t.id));
+      if (isolated.length < tables.length) isolated.forEach((t) => rank.set(t.id, maxRank + 1));
+
+      const rankVals = [...new Set(rank.values())].sort((a, b) => a - b);
+      const cols = rankVals.map((r) => tables.filter((t) => rank.get(t.id) === r));
+      // 列内の順序: まず今のy順（ユーザーの並びを尊重）→ 参照先の並び位置の重心で寄せて線の交差を減らす
+      cols.forEach((col) => col.sort((a, b) => a.y - b.y));
+      const orderIdx = new Map<string, number>();
+      cols.forEach((col) => col.forEach((t, i) => orderIdx.set(t.id, i)));
+      for (let i = 1; i < cols.length; i++) {
+        const bary = (t: Table) => {
+          const ps = (refs.get(t.id) ?? []).map((p) => orderIdx.get(p) ?? 0);
+          return ps.length ? ps.reduce((s, v) => s + v, 0) / ps.length : orderIdx.get(t.id)!;
+        };
+        cols[i].sort((a, b) => bary(a) - bary(b));
+        cols[i].forEach((t, j) => orderIdx.set(t.id, j));
+      }
+
+      const heights = cols.map((col) => col.reduce((s, t) => s + tableHeight(t), 0) + GAP_Y * (col.length - 1));
+      const maxH = Math.max(...heights);
+      cols.forEach((col, i) => {
+        const x = 60 + i * (CARD_W + GAP_X);
+        let y = 60 + (maxH - heights[i]) / 2; // 短い列は縦中央に寄せる
+        for (const t of col) {
+          placed.push({ id: t.id, x, y });
+          y += tableHeight(t) + GAP_Y;
+        }
+      });
+    }
+
+    placed.forEach((p) => act({ type: "MOVE_TABLE", id: p.id, x: p.x, y: p.y }));
+    pulse();
+    // 整列後は全体が収まる位置へ視点を移す
+    const el = canvasRef.current;
+    if (el) {
+      const hOf = new Map(tables.map((t) => [t.id, tableHeight(t)]));
+      const maxX = Math.max(...placed.map((p) => p.x + CARD_W)) + 60;
+      const maxY = Math.max(...placed.map((p) => p.y + hOf.get(p.id)!)) + 60;
+      const r = el.getBoundingClientRect();
+      setView({ x: 0, y: 0, k: Math.max(0.2, Math.min(1, r.width / maxX, r.height / maxY)) });
+    }
+  };
+
   const onDragStart = (e: React.MouseEvent, t: Table) => {
     if ((e.target as HTMLElement).closest("input,select,button,textarea,[data-fk-handle]")) return;
     dragRef.current = { id: t.id, sx: e.clientX, sy: e.clientY, ox: t.x, oy: t.y, k: view.k };
@@ -251,23 +325,7 @@ export function App() {
 
   const byId = Object.fromEntries(model.tables.map((t) => [t.id, t]));
 
-  /** FK線: 起点はカラム行、終点は相手テーブルのPK行（無ければヘッダ）。近い側面から出入りする */
-  const edgePath = (from: Table, columnId: string, to: Table) => {
-    const toRight = to.x + CARD_W / 2 >= from.x + CARD_W / 2;
-    const x1 = toRight ? from.x + CARD_W : from.x;
-    const y1 = colY(from, columnId);
-    const pk = to.columns.find((c) => c.pk);
-    const y2 = pk ? colY(to, pk.id) : to.y + HEADER_H / 2;
-    const x2 = toRight ? to.x : to.x + CARD_W;
-    const d1 = toRight ? 60 : -60;
-    return { d: `M ${x1} ${y1} C ${x1 + d1} ${y1}, ${x2 - d1} ${y2}, ${x2} ${y2}`, x1, y1 };
-  };
-
-  const fkEdges = model.tables.flatMap((t) =>
-    t.columns
-      .filter((c) => c.fk && byId[c.fk.tableId])
-      .map((c) => ({ ...edgePath(t, c.id, byId[c.fk!.tableId]), key: `${t.id}-${c.id}` }))
-  );
+  const fkEdges = computeFkEdges(model.tables);
 
   const linkSource = link ? byId[link.tableId] : null;
   const linkTarget = link ? hitTable(link) : null;
@@ -279,6 +337,19 @@ export function App() {
     navigator.clipboard?.writeText(sql);
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
+  };
+
+  /** いまの図をそのままの配置で1枚の自己完結HTMLとしてダウンロード（共有・資料用） */
+  const downloadHtml = () => {
+    const blob = new Blob([buildExportHtml(model, sql)], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    a.href = url;
+    a.download = `drawzu-schema-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -298,6 +369,14 @@ export function App() {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={autoLayout} title="FKの向きで並べ直す（参照される側が左・参照する側が右）"
+            style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
+            ✦ 整列
+          </button>
+          <button onClick={downloadHtml} title="いまの図をそのままの配置で1枚のHTMLに保存（SQL付き・共有用）"
+            style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
+            📷 HTML保存
+          </button>
           <button onClick={() => setPermOpen(true)}
             style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
             🛡 権限マップ
@@ -335,12 +414,39 @@ export function App() {
                 <path d="M 0 0 L 10 5 L 0 10 z" fill={accent} opacity="0.75" />
               </marker>
             </defs>
-            {fkEdges.map((e) => (
-              <g key={e.key}>
-                <path d={e.d} fill="none" stroke={accent} strokeWidth="1.6" opacity="0.55" markerEnd="url(#fk-arrow)" />
-                <circle cx={e.x1} cy={e.y1} r="3" fill={accent} opacity="0.75" />
-              </g>
-            ))}
+            {fkEdges.map((e) => {
+              const selected = selectedEdge?.tableId === e.tableId && selectedEdge?.columnId === e.columnId;
+              // FK張りのドラッグ中はドロップ先の判断が主役なので、ホバーによる強弱は付けない
+              const hover = link ? null : hoverId;
+              const focused = hover != null && (e.tableId === hover || e.toId === hover);
+              const dimmed = hover != null && !focused && !selected;
+              return (
+                <g key={e.key}>
+                  <path d={e.d} fill="none" stroke={accent}
+                    strokeWidth={selected ? 2.6 : focused ? 2.2 : 1.6}
+                    opacity={selected ? 0.95 : focused ? 0.9 : dimmed ? 0.08 : 0.55}
+                    markerEnd="url(#fk-arrow)" style={{ transition: "opacity 130ms ease" }} />
+                  <circle cx={e.x1} cy={e.y1} r="3" fill={accent} opacity={dimmed ? 0.08 : 0.75} style={{ transition: "opacity 130ms ease" }} />
+                  {/* 透明な太い当たり判定。1.6pxの線を狙わなくてもクリックで選択できる */}
+                  <path d={e.d} fill="none" stroke="transparent" strokeWidth="14"
+                    style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    onClick={() => setSelectedEdge({ tableId: e.tableId, columnId: e.columnId })}>
+                    <title>クリックで選択 → Delete で FK を解除</title>
+                  </path>
+                  {selected && (
+                    <g style={{ pointerEvents: "auto", cursor: "pointer" }}
+                      onMouseDown={(ev) => ev.stopPropagation()}
+                      onClick={() => removeFk(e.tableId, e.columnId)}>
+                      <title>FK を解除（Delete キーでも消せる）</title>
+                      <circle cx={(e.x1 + e.x2) / 2} cy={(e.y1 + e.y2) / 2} r="8" fill="#fff" stroke={accent} strokeWidth="1.2" />
+                      <text x={(e.x1 + e.x2) / 2} y={(e.y1 + e.y2) / 2} textAnchor="middle" dominantBaseline="central"
+                        fontSize="9" fontWeight="700" fill={accent} style={{ userSelect: "none" }}>✕</text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
             {link && linkFrom && (
               <g>
                 <path
@@ -353,7 +459,7 @@ export function App() {
 
           {model.tables.map((t) => (
             <TableCard key={t.id} t={t} tables={model.tables} onDragStart={onDragStart} onLinkStart={onLinkStart} edit={edit}
-              dropTarget={!!link && linkTarget?.id === t.id && link.tableId !== t.id} />
+              onHover={setHoverId} dropTarget={!!link && linkTarget?.id === t.id && link.tableId !== t.id} />
           ))}
           </div>
 
@@ -377,24 +483,40 @@ export function App() {
           </div>
         </div>
 
-        {/* SQL panel */}
-        <div style={{ width: 380, flexShrink: 0, background: "#1b1f2a", display: "flex", flexDirection: "column",
-          boxShadow: flash ? `inset 3px 0 0 ${accent}` : "inset 3px 0 0 transparent", transition: "box-shadow 240ms ease" }}>
-          <div style={{ height: 42, borderBottom: "1px solid #2a2f3d", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
-            <span style={{ color: "#8b93a7", fontSize: 11, letterSpacing: "0.06em", fontWeight: 600 }}>GENERATED · schema.sql</span>
-            <button onClick={copy}
-              style={{ background: "transparent", color: copied ? "#6ee7a8" : "#8b93a7", fontSize: 12, border: "none", cursor: "pointer" }}>
-              {copied ? "✓ コピーした" : "コピー"}
-            </button>
+        {/* SQL panel（畳むと右端の帯だけ残る） */}
+        {sqlOpen ? (
+          <div style={{ width: 380, flexShrink: 0, background: "#1b1f2a", display: "flex", flexDirection: "column",
+            boxShadow: flash ? `inset 3px 0 0 ${accent}` : "inset 3px 0 0 transparent", transition: "box-shadow 240ms ease" }}>
+            <div style={{ height: 42, borderBottom: "1px solid #2a2f3d", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
+              <span style={{ color: "#8b93a7", fontSize: 11, letterSpacing: "0.06em", fontWeight: 600 }}>GENERATED · schema.sql</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <button onClick={copy}
+                  style={{ background: "transparent", color: copied ? "#6ee7a8" : "#8b93a7", fontSize: 12, border: "none", cursor: "pointer" }}>
+                  {copied ? "✓ コピーした" : "コピー"}
+                </button>
+                <button onClick={toggleSql} title="SQLパネルを畳む"
+                  style={{ background: "transparent", color: "#8b93a7", fontSize: 13, border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}>
+                  »
+                </button>
+              </div>
+            </div>
+            <pre style={{ margin: 0, padding: "16px 18px", overflow: "auto", flex: 1, fontSize: 12.5, lineHeight: 1.7,
+              fontFamily: "'JetBrains Mono', ui-monospace, monospace", color: "#c8cede", whiteSpace: "pre" }}>
+              <SqlHighlighted sql={sql} />
+            </pre>
+            <div style={{ padding: "10px 18px", borderTop: "1px solid #2a2f3d", color: "#5f6577", fontSize: 11, flexShrink: 0 }}>
+              図を触っても、AIが patch しても、同じ1個のモデルが更新されて即再生成される。
+            </div>
           </div>
-          <pre style={{ margin: 0, padding: "16px 18px", overflow: "auto", flex: 1, fontSize: 12.5, lineHeight: 1.7,
-            fontFamily: "'JetBrains Mono', ui-monospace, monospace", color: "#c8cede", whiteSpace: "pre" }}>
-            <SqlHighlighted sql={sql} />
-          </pre>
-          <div style={{ padding: "10px 18px", borderTop: "1px solid #2a2f3d", color: "#5f6577", fontSize: 11, flexShrink: 0 }}>
-            図を触っても、AIが patch しても、同じ1個のモデルが更新されて即再生成される。
-          </div>
-        </div>
+        ) : (
+          <button onClick={toggleSql} title="SQLパネルを開く"
+            style={{ width: 28, flexShrink: 0, background: "#1b1f2a", border: "none", cursor: "pointer",
+              color: "#8b93a7", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em",
+              writingMode: "vertical-rl", padding: "14px 0", textAlign: "center",
+              boxShadow: flash ? `inset 3px 0 0 ${accent}` : "inset 3px 0 0 transparent", transition: "box-shadow 240ms ease" }}>
+            « SQL
+          </button>
+        )}
       </div>
 
       {/* 洗い出しモーダル: まだ図を見ていない段階の操作なので、大きく開いて頭の中を一気に流し込む */}
@@ -574,6 +696,11 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
 
       {tab === "guide" ? (
         <>
+          <div style={{ border: `1px solid ${line}`, borderRadius: 8, background: "#fafbfc", padding: "8px 10px", margin: "12px 0 2px", fontSize: 11, lineHeight: 1.6, color: "#4b5261" }}>
+            <b style={{ color: ink }}>前提</b>: drawzu が生成する SQL・カラム型・RLS は <b>Postgres 方言</b>（Supabase / Neon / 素の Postgres など）。
+            RLS は Postgres の機能で、MySQL や SQLite に同等物は無い。
+            対象プロジェクトの言語は問わない（モデルは <code style={{ fontSize: 10 }}>.drawzu/model.json</code>、出力は SQL）。
+          </div>
           <H>設計の手順（この順にやる）</H>
           <Step n={1} title="保存したいものを名詞で洗い出す">
             画面や機能を眺めて「覚えておく必要があるもの」を名詞で列挙する（ユーザー、投稿、コメント、注文…）。この名詞が、だいたいそのままテーブルになる。<br />
@@ -669,6 +796,7 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
       <H>キャンバス</H>
       <Row icon="✋">背景をドラッグで全体を移動（スクロールでも動く）</Row>
       <Row icon="🔍">ピンチ or ⌘＋ホイールでズーム。左下の − / ＋ でも。% クリックで100%に戻る</Row>
+      <Row icon="✦">上の「✦ 整列」で、FKの向きに沿って自動で並べ直す（参照される側が左に来る）</Row>
 
       <H>カラム</H>
       <Row icon="⚿">鍵クリックで主キー切替</Row>
@@ -680,6 +808,8 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
       <Row icon="●">行右端の <b>●</b> をドラッグして相手テーブルに落とすと FK が張れる</Row>
       <Row icon="–">「–」プルダウンから参照先を選んでも同じ</Row>
       <Row icon="→">線は FK カラムから出て、参照先の主キーに矢印で刺さる</Row>
+      <Row icon="◉">テーブルにホバーすると、そのテーブルに繋がる線だけ濃く表示（線が多い時に）</Row>
+      <Row icon="✕">線をクリックで選択 → <b>Delete</b> キーか線上の ✕ ボタンで FK を解除</Row>
 
       <H>インデックス</H>
       <Row icon="⌗">カード下の「＋ ⌗ index」→ カラム行をクリックして対象を選ぶ（複数可＝複合）→ インデックス名をクリックで確定</Row>
@@ -693,6 +823,8 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
 
       <H>SQL</H>
       <Row icon="▤">右パネルに常に最新の DDL（FK・index・RLS 込み）。「コピー」でそのまま Supabase 等に貼れる</Row>
+      <Row icon="»">パネル右上の » で畳める。畳んでも右端の「« SQL」帯クリックで戻る</Row>
+      <Row icon="📷">上の「📷 HTML保存」で、いまの図をそのままの配置＋SQL付きの1枚のHTMLとして保存（共有・資料用）</Row>
 
           <H>保存とAI連携</H>
           <Row icon="💾">変更は即座に <code style={{ fontSize: 10.5 }}>.drawzu/model.json</code> に保存される</Row>
@@ -703,12 +835,13 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
+function TableCard({ t, tables, onDragStart, onLinkStart, edit, onHover, dropTarget }: {
   t: Table;
   tables: Table[];
   onDragStart: (e: React.MouseEvent, t: Table) => void;
   onLinkStart: (e: React.MouseEvent, t: Table, c: Column) => void;
   edit: (op: Op) => void;
+  onHover: (id: string | null) => void;
   dropTarget: boolean;
 }) {
   const [editingName, setEditingName] = useState(false);
@@ -734,6 +867,7 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, dropTarget }: {
 
   return (
     <div onMouseDown={(e) => onDragStart(e, t)}
+      onMouseEnter={() => onHover(t.id)} onMouseLeave={() => onHover(null)}
       style={{ position: "absolute", left: t.x, top: t.y, width: CARD_W, background: "#fff",
         borderRadius: 10, border: `1.5px solid ${dropTarget ? accent : line}`,
         boxShadow: dropTarget ? `0 0 0 3px ${accent}33, 0 4px 16px rgba(30,35,50,0.08)` : "0 4px 16px rgba(30,35,50,0.08)",
