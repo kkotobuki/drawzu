@@ -35,6 +35,12 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 const originOk = (origin: string | undefined) => !origin || ALLOWED_ORIGINS.has(origin);
 
+/* アイドル自動停止（MCPブリッジの自動起動と一対のライフサイクル管理）。
+   ブラウザ(WS)が1つも繋がっておらず、最後のアクセスからこの時間が過ぎたら自発終了する。
+   次に必要になればブリッジが再起動するので、体感は「常に生きている」のまま。0 で無効 */
+const IDLE_TIMEOUT_MIN = Number(process.env.DRAWZU_IDLE_TIMEOUT ?? 30);
+let lastActivity = Date.now();
+
 const store = new FileStore(MODEL_PATH);
 const loaded = await store.load();
 const hub = new ModelHub(store, loaded ?? emptyModel());
@@ -65,8 +71,16 @@ const MIME: Record<string, string> = {
 };
 
 const server = createServer(async (req, res) => {
+  lastActivity = Date.now();
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
+  // MCPブリッジの生存確認・接続先確認用。root を返すのは「別プロジェクトの
+  // サーバーに誤接続していないか」をブリッジ側で検証できるようにするため
+  if (path === "/api/health") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, root: ROOT, version: hub.version }));
+    return;
+  }
   if (path === "/api/model") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ version: hub.version, model: hub.model }));
@@ -152,9 +166,15 @@ const wss = new WebSocketServer({
 });
 
 wss.on("connection", (ws: WebSocket) => {
+  lastActivity = Date.now();
+  // 切断時刻を起点にしないと「ブラウザを長時間開いて閉じた直後」に即終了してしまう
+  ws.on("close", () => {
+    lastActivity = Date.now();
+  });
   ws.send(JSON.stringify({ type: "model", version: hub.version, model: hub.model }));
 
   ws.on("message", (data) => {
+    lastActivity = Date.now();
     let parsed: unknown;
     try {
       parsed = JSON.parse(String(data));
@@ -185,4 +205,16 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
     await hub.flush();
     process.exit(0);
   });
+}
+
+if (IDLE_TIMEOUT_MIN > 0) {
+  // チェック間隔はタイムアウトより細かく（短いタイムアウト設定でも遅延なく効くように）
+  const tick = Math.min(60_000, IDLE_TIMEOUT_MIN * 60_000);
+  setInterval(async () => {
+    if (wss.clients.size > 0) return;
+    if (Date.now() - lastActivity < IDLE_TIMEOUT_MIN * 60_000) return;
+    console.log(`[drawzu] ${IDLE_TIMEOUT_MIN}分間使われていないため自動終了します`);
+    await hub.flush();
+    process.exit(0);
+  }, tick);
 }
