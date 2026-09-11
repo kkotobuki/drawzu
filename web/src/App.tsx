@@ -4,7 +4,7 @@ import type { Op } from "../../core/ops.ts";
 import { toSQL } from "../../core/sql.ts";
 import { uid, useModel } from "./useModel.ts";
 import {
-  CARD_W, HEADER_H, ROW_H, IDX_ROW_H, RLS_HEAD_H, RLS_AUD_ROW_H, MEMO_H,
+  CARD_W, HEADER_H, ROW_H, IDX_ROW_H, RLS_HEAD_H, RLS_AUD_ROW_H,
   ink, sub, line, accent, pkColor, rlsColor, CMD_COLOR,
   memoHeight, rlsAudiences, rlsSectionHeight, tableHeight, colY, computeFkEdges,
 } from "./layout.ts";
@@ -373,7 +373,7 @@ export function App() {
             style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
             ✦ 整列
           </button>
-          <button onClick={downloadHtml} title="いまの図をそのままの配置で1枚のHTMLに保存（SQL付き・共有用）"
+          <button onClick={downloadHtml} title="いまの図を1枚のHTMLに保存。開くと全体が収まる倍率で表示され、拡大縮小と移動ができる（SQL付き・共有用）"
             style={{ background: "none", color: sub, fontSize: 12, padding: "6px 11px", borderRadius: 8, border: `1px solid ${line}`, cursor: "pointer", whiteSpace: "nowrap" }}>
             📷 HTML保存
           </button>
@@ -922,12 +922,12 @@ function TableCard({ t, tables, onDragStart, onLinkStart, edit, onHover, dropTar
             setEditingMemo(false);
           }}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.target as HTMLTextAreaElement).blur(); }}
-          style={{ display: "block", width: "100%", height: MEMO_H, resize: "none", border: "none", outline: "none",
+          style={{ display: "block", width: "100%", height: Math.max(memoHeight(t), 46), resize: "none", border: "none", outline: "none",
             borderBottom: `1px solid ${line}`, background: "#fdf9e8", color: "#6b6018",
             fontSize: 11, lineHeight: 1.5, padding: "5px 12px", fontFamily: "inherit" }} />
       ) : t.comment != null && (
         <div onClick={() => setEditingMemo(true)} title="クリックで編集"
-          style={{ height: MEMO_H, overflowY: "auto", borderBottom: `1px solid ${line}`, background: "#fdf9e8",
+          style={{ height: memoHeight(t), overflowY: "auto", borderBottom: `1px solid ${line}`, background: "#fdf9e8",
             color: "#6b6018", fontSize: 11, lineHeight: 1.5, padding: "5px 12px", cursor: "text", whiteSpace: "pre-wrap" }}>
           {t.comment}
         </div>
