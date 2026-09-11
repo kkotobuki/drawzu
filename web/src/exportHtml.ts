@@ -1,8 +1,8 @@
 import type { Model, Table } from "../../core/model.ts";
 import {
-  CARD_W, HEADER_H, ROW_H, IDX_ROW_H, RLS_HEAD_H, RLS_AUD_ROW_H, MEMO_H,
+  CARD_W, HEADER_H, ROW_H, IDX_ROW_H, RLS_HEAD_H, RLS_AUD_ROW_H,
   ink, sub, line, accent, pkColor, rlsColor, CMD_COLOR,
-  rlsAudiences, rlsSectionHeight, tableHeight, computeFkEdges,
+  memoHeight, rlsAudiences, rlsSectionHeight, tableHeight, computeFkEdges,
 } from "./layout.ts";
 
 /* いまの図を「そのままの配置」で1枚の自己完結HTMLに投影する。
@@ -30,7 +30,7 @@ function cardHtml(t: Table, byId: Record<string, Table>, ox: number, oy: number)
   }).join("");
 
   const memo = t.comment != null
-    ? `<div style="height:${MEMO_H}px;overflow:hidden;border-bottom:1px solid ${line};background:#fdf9e8;color:#6b6018;font-size:11px;line-height:1.5;padding:5px 12px;white-space:pre-wrap">${esc(t.comment)}</div>`
+    ? `<div style="height:${memoHeight(t)}px;overflow:hidden;border-bottom:1px solid ${line};background:#fdf9e8;color:#6b6018;font-size:11px;line-height:1.5;padding:5px 12px;white-space:pre-wrap">${esc(t.comment)}</div>`
     : "";
 
   const idxRows = t.indexes.map((ix) => {
@@ -99,18 +99,62 @@ export function buildExportHtml(model: Model, sql: string): string {
   return `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>drawzu schema — ${esc(stamp)}</title>
-<style>*{box-sizing:border-box;margin:0}body{font-family:'Inter',system-ui,sans-serif;color:${ink};background:#eef0f3}</style>
+<style>
+*{box-sizing:border-box;margin:0}
+body{font-family:'Inter',system-ui,sans-serif;color:${ink};background:#eef0f3}
+#viewport{position:relative;margin:0 20px 16px;height:calc(100vh - 78px);min-height:360px;overflow:hidden;cursor:grab;border:1px solid ${line};border-radius:12px;background-color:#eef0f3;background-image:radial-gradient(#d4d7dd 1px,transparent 1px);background-size:22px 22px;touch-action:none;user-select:none}
+#viewport.dragging{cursor:grabbing}
+#world{position:absolute;left:0;top:0;width:${w}px;height:${h}px;transform-origin:0 0}
+#zoom{position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:2px;background:#fff;border:1px solid ${line};border-radius:8px;padding:3px;box-shadow:0 2px 8px rgba(30,35,50,0.08)}
+#zoom button{background:none;border:none;cursor:pointer;color:${sub};font-size:13px;width:28px;height:26px;border-radius:5px;font-family:inherit}
+#zoom button:hover{background:#f4f5f7;color:${ink}}
+#zoom #pct{font-size:11px;color:${sub};min-width:42px;text-align:center;font-variant-numeric:tabular-nums}
+#hint{position:absolute;left:14px;bottom:14px;font-size:10.5px;color:${sub};background:#ffffffcc;padding:4px 8px;border-radius:6px;pointer-events:none}
+</style>
 </head><body>
 <div style="padding:14px 20px;display:flex;align-items:baseline;gap:10px">
   <span style="font-weight:700;font-size:15px">drawzu</span>
   <span style="font-size:11px;color:${sub}">スキーマ図のスナップショット · ${esc(stamp)} · テーブル ${tables.length}</span>
 </div>
-<div style="overflow:auto;padding:0 20px 16px">
-  <div style="position:relative;width:${w}px;height:${h}px;background-color:#eef0f3;background-image:radial-gradient(#d4d7dd 1px,transparent 1px);background-size:22px 22px;border:1px solid ${line};border-radius:12px;overflow:hidden">
+<div id="viewport">
+  <div id="world">
     ${svg}
     ${tables.map((t) => cardHtml(t, byId, ox, oy)).join("\n    ")}
   </div>
+  <div id="hint">ドラッグで移動 · ⌘/Ctrl+ホイール・ピンチで拡大縮小</div>
+  <div id="zoom">
+    <button id="zout" title="縮小">−</button>
+    <button id="fit" title="全体を表示"><span id="pct">100%</span></button>
+    <button id="zin" title="拡大">＋</button>
+  </div>
 </div>
+<script>
+(function(){
+  var W=${w},H=${h},MIN=0.2,MAX=2.5;
+  var vp=document.getElementById("viewport"),world=document.getElementById("world"),pct=document.getElementById("pct");
+  var v={x:0,y:0,k:1};
+  function clamp(k){return Math.min(MAX,Math.max(MIN,k));}
+  function render(){world.style.transform="translate("+v.x+"px,"+v.y+"px) scale("+v.k+")";pct.textContent=Math.round(v.k*100)+"%";}
+  // 全テーブルが収まる倍率にして中央へ。開いた直後と「全体を表示」で使う
+  function fit(){var r=vp.getBoundingClientRect();var k=clamp(Math.min(r.width/W,r.height/H));v={k:k,x:(r.width-W*k)/2,y:(r.height-H*k)/2};render();}
+  // 画面上の点 (px,py) を不動点にして倍率を k にする
+  function zoomAt(k,px,py){k=clamp(k);v={k:k,x:px-((px-v.x)/v.k)*k,y:py-((py-v.y)/v.k)*k};render();}
+  function zoomCenter(f){var r=vp.getBoundingClientRect();zoomAt(v.k*f,r.width/2,r.height/2);}
+  vp.addEventListener("wheel",function(e){e.preventDefault();var r=vp.getBoundingClientRect();
+    if(e.ctrlKey||e.metaKey){zoomAt(v.k*Math.exp(-e.deltaY*0.01),e.clientX-r.left,e.clientY-r.top);}
+    else{v.x-=e.deltaX;v.y-=e.deltaY;render();}},{passive:false});
+  var drag=null;
+  vp.addEventListener("pointerdown",function(e){if(e.button!==0||e.target.closest("#zoom"))return;drag={sx:e.clientX,sy:e.clientY,ox:v.x,oy:v.y};vp.setPointerCapture(e.pointerId);vp.classList.add("dragging");});
+  vp.addEventListener("pointermove",function(e){if(!drag)return;v.x=drag.ox+(e.clientX-drag.sx);v.y=drag.oy+(e.clientY-drag.sy);render();});
+  function endDrag(){drag=null;vp.classList.remove("dragging");}
+  vp.addEventListener("pointerup",endDrag);vp.addEventListener("pointercancel",endDrag);
+  document.getElementById("zin").addEventListener("click",function(){zoomCenter(1.2);});
+  document.getElementById("zout").addEventListener("click",function(){zoomCenter(1/1.2);});
+  document.getElementById("fit").addEventListener("click",fit);
+  window.addEventListener("resize",fit);
+  fit();
+})();
+</script>
 <details style="margin:0 20px 24px">
   <summary style="cursor:pointer;font-size:12px;color:${sub};font-weight:600">schema.sql（クリックで開く）</summary>
   <pre style="margin-top:8px;background:#1b1f2a;color:#c8cede;font-size:12px;line-height:1.7;padding:14px 16px;border-radius:10px;overflow:auto;font-family:'JetBrains Mono',ui-monospace,monospace">${esc(sql)}</pre>
