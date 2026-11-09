@@ -59,7 +59,15 @@ async function shutdown(reason: string): Promise<never> {
   shuttingDown = true;
   console.log(`[drawzu] 終了します（${reason}）`);
   server.close(); // 新規接続を止める（進行中の要求は shuttingDown で 503 を返す）
-  for (const client of wss.clients) client.close(1001, "server shutting down");
+  // 開いているブラウザへ close フレーム(1001)を送り、届くのを少し待つ（exit で握りつぶさない）。上限付き
+  const closes = [...wss.clients].map(
+    (client) =>
+      new Promise<void>((r) => {
+        client.once("close", () => r());
+        client.close(1001, "server shutting down");
+      })
+  );
+  await Promise.race([Promise.all(closes), new Promise((r) => setTimeout(r, 500))]);
   try {
     await hub.flush();
     process.exit(0);

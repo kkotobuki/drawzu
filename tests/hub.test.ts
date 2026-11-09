@@ -79,3 +79,31 @@ test("ModelHub.flush: store.flush の待ち中に apply された変更も保存
   assert.deepEqual(saved.at(-1)!.tables.map((t) => t.id).sort(), ["t_first", "t_second"]);
   assert.ok(flushCalls >= 2);
 });
+
+test("ModelHub.flush: store.flush の待ち中にタイマーが発火して始まった保存も待つ", async () => {
+  // FileStore 風: save は遅く、flush は「呼んだ時点のキュー」だけを待つ
+  const saved: Model[] = [];
+  let queue = Promise.resolve();
+  const store: ModelStore = {
+    async load() {
+      return null;
+    },
+    save(m) {
+      const run = queue.then(() => new Promise<void>((r) => setTimeout(r, 100))).then(() => {
+        saved.push(m);
+      });
+      queue = run.catch(() => {});
+      return run;
+    },
+    flush() {
+      return queue;
+    },
+  };
+  const hub = new ModelHub(store, emptyModel(), 10); // デバウンス(10ms) < 書き込み(100ms)
+  hub.apply({ type: "ADD_TABLE", table: table("t_first") });
+  const flushing = hub.flush(); // t_first の保存(100ms)を待つ
+  await new Promise((r) => setTimeout(r, 20));
+  hub.apply({ type: "ADD_TABLE", table: table("t_second") }); // 10ms 後にタイマー発火 → 2 件目の保存がキューへ
+  await flushing;
+  assert.deepEqual(saved.at(-1)!.tables.map((t) => t.id).sort(), ["t_first", "t_second"]);
+});
