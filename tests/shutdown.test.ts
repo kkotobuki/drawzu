@@ -40,7 +40,7 @@ async function waitHealthy(port: number): Promise<void> {
   for (let i = 0; i < 80; i++) {
     await new Promise((r) => setTimeout(r, 100));
     try {
-      if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) return;
+      if ((await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1000) })).ok) return;
     } catch {}
   }
   throw new Error("server did not become healthy");
@@ -76,6 +76,7 @@ test("SIGTERM: 直前に適用した変更が model.json に残り、exit code �
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ops: [{ type: "ADD_TABLE", table: { id: "t_last", name: "last", columns: [] } }] }),
+      signal: AbortSignal.timeout(5000),
     });
     assert.equal(res.status, 200);
     // 300ms のデバウンスが発火する前に止める → flush が書く
@@ -128,11 +129,12 @@ test("SIGTERM: 本文受信中だった POST は適用されず、開いてい�
       method: "POST",
       headers: { "content-type": "application/json" },
       body: stream,
+      signal: AbortSignal.timeout(5000),
       // @ts-expect-error undici 拡張: ストリーム本文は duplex 指定が必要
       duplex: "half",
     }).then(
       (r) => r.status,
-      () => "error" as const
+      (e: Error) => (e.name === "TimeoutError" ? ("timeout" as const) : ("disconnected" as const))
     );
     await within(3000, pulled, "first chunk pulled");
     await new Promise((r) => setTimeout(r, 50)); // 前半がサーバーへ届くまでの猶予
@@ -140,9 +142,10 @@ test("SIGTERM: 本文受信中だった POST は適用されず、開いてい�
     // サーバーが終了処理に入った証拠（ログ）を待ってから残りを送る
     await waitFor(() => logs.text.includes("終了します"), "shutdown log");
     finish();
-    const outcome = await within(5000, pending, "pending POST");
-    // 503（終了中）か、終了で接続が切れたかのどちらか。200 で「適用した」と言ってはいけない
-    assert.notEqual(outcome, 200);
+    const outcome = await within(6000, pending, "pending POST");
+    // 503（終了中）か、終了で接続が切れたかのどちらか。200 で「適用した」と言ってはいけない。
+    // どちらで観測されても、model.json に t_late が無いこと（下で確認）が「適用されなかった」証拠
+    assert.ok(outcome === 503 || outcome === "disconnected", `unexpected outcome: ${outcome}`);
     assert.equal(await within(3000, wsClosed, "ws close"), 1001);
     assert.equal(await within(5000, exitOf(child), "server exit"), 0);
     const saved = JSON.parse(readFileSync(join(root, ".drawzu", "model.json"), "utf8")) as { tables: { id: string }[] };

@@ -101,9 +101,10 @@ test("ModelHub.flush: store.flush の待ち中にタイマーが発火して始�
   };
   const hub = new ModelHub(store, emptyModel(), 10); // デバウンス(10ms) < 書き込み(100ms)
   hub.apply({ type: "ADD_TABLE", table: table("t_first") });
-  const flushing = hub.flush(); // t_first の保存(100ms)を待つ
+  await new Promise((r) => setTimeout(r, 30)); // タイマー発火済み → t_first の保存(100ms)が進行中、タイマーは無い
+  const flushing = hub.flush(); // 内側の while は回らず、store.flush（進行中の保存）の待ちに入る
   await new Promise((r) => setTimeout(r, 20));
-  hub.apply({ type: "ADD_TABLE", table: table("t_second") }); // 10ms 後にタイマー発火 → 2 件目の保存がキューへ
+  hub.apply({ type: "ADD_TABLE", table: table("t_second") }); // 10ms 後にタイマー発火 → 2 件目の保存がキューへ、タイマーは null
   await flushing;
   assert.deepEqual(saved.at(-1)!.tables.map((t) => t.id).sort(), ["t_first", "t_second"]);
 });
