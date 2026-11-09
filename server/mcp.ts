@@ -158,7 +158,7 @@ server.tool(
     "型は uuid/text/varchar/int8/int4/numeric/boolean/timestamptz/date/jsonb。",
     "座標 x,y はER図上の配置。新規テーブルは既存と重ならない位置に置くこと（カード幅248px、高さ約40+行数×30px）。",
   ].join("\n"),
-  { ops: z.array(z.record(z.unknown())).describe("適用する op の配列。上記の形式に従うこと") },
+  { ops: z.array(z.record(z.string(), z.unknown())).describe("適用する op の配列。上記の形式に従うこと") },
   async ({ ops }) => {
     const body = JSON.stringify({ ops });
     // サーバー側の本文上限(413)に当たると原因が伝わりにくいので、送る前に判定して明示する

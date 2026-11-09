@@ -24,10 +24,23 @@ export const ForeignKeySchema = z.object({
   tableId: z.string(),
 });
 
-export const ColumnSchema = z.object({
+/* 各エンティティは「既定値を持たない土台」と「既定値を足した完全形」の 2 段で定義する。
+   部分更新 op（UPDATE_*）の patch は土台から作る。zod 4 は .partial() の内側でも既定値を適用するので、
+   完全形から patch を作ると「name だけ変えたつもりが pk:false / nullable:true まで上書き」して既存の値を壊す */
+
+const ColumnFields = z.object({
   id: z.string(),
   name: z.string().min(1),
   type: z.string().min(1),
+  pk: z.boolean(),
+  nullable: z.boolean(),
+  unique: z.boolean(),
+  fk: ForeignKeySchema.nullable(),
+  default: z.string().nullable(),
+  comment: z.string().nullable(),
+});
+
+export const ColumnSchema = ColumnFields.extend({
   pk: z.boolean().default(false),
   nullable: z.boolean().default(true),
   unique: z.boolean().default(false),
@@ -35,6 +48,9 @@ export const ColumnSchema = z.object({
   default: z.string().nullable().default(null),
   comment: z.string().nullable().default(null),
 });
+
+/** UPDATE_COLUMN の patch。送ったキーだけを持つ（既定値を足さない） */
+export const ColumnPatchSchema = ColumnFields.omit({ id: true }).partial();
 
 export const RlsPolicySchema = z.object({
   id: z.string(),
@@ -48,19 +64,38 @@ export const RlsPolicySchema = z.object({
   audience: z.array(z.string()).default([]),
 });
 
-export const IndexSchema = z.object({
+const IndexFields = z.object({
   id: z.string(),
   /** null なら投影時に idx_<table>_<cols> を自動生成 */
-  name: z.string().nullable().default(null),
+  name: z.string().nullable(),
   /** カラム名でなく id で持つ。カラムをリネームしてもインデックス定義が壊れないため */
+  columns: z.array(z.string()),
+  unique: z.boolean(),
+});
+
+export const IndexSchema = IndexFields.extend({
+  name: z.string().nullable().default(null),
   columns: z.array(z.string()).default([]),
   unique: z.boolean().default(false),
 });
 
-export const TableSchema = z.object({
+/** UPDATE_INDEX の patch。送ったキーだけを持つ */
+export const IndexPatchSchema = IndexFields.omit({ id: true }).partial();
+
+const TableFields = z.object({
   id: z.string(),
   name: z.string().min(1),
   /** ER図ビュー上の配置。モデルの一部として永続化する（開き直しても配置が保たれる） */
+  x: z.number(),
+  y: z.number(),
+  columns: z.array(ColumnSchema),
+  indexes: z.array(IndexSchema),
+  rlsEnabled: z.boolean(),
+  rls: z.array(RlsPolicySchema),
+  comment: z.string().nullable(),
+});
+
+export const TableSchema = TableFields.extend({
   x: z.number().default(80),
   y: z.number().default(80),
   columns: z.array(ColumnSchema).default([]),
@@ -69,6 +104,9 @@ export const TableSchema = z.object({
   rls: z.array(RlsPolicySchema).default([]),
   comment: z.string().nullable().default(null),
 });
+
+/** UPDATE_TABLE の patch。テーブル自身の属性だけ（構造の変更は各専用 op）。送ったキーだけを持つ */
+export const TablePatchSchema = TableFields.omit({ id: true, columns: true, indexes: true, rls: true }).partial();
 
 export const ModelSchema = z
   .object({
