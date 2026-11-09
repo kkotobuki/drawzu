@@ -17,6 +17,8 @@ test("originOk: Origin 無し(非ブラウザ)と許可リスト内は通し、�
   assert.equal(originOk("http://localhost:4989", ALLOWED), true);
   assert.equal(originOk("http://evil.example", ALLOWED), false);
   assert.equal(originOk("null", ALLOWED), false);
+  // 空文字は「Origin 無し」扱い（ブラウザは空文字ではなく "null" を送るので実害なし。仕様の固定）
+  assert.equal(originOk("", ALLOWED), true);
   // ポート違い・スキーム違いは別オリジン
   assert.equal(originOk("http://localhost:4990", ALLOWED), false);
   assert.equal(originOk("https://localhost:4989", ALLOWED), false);
@@ -27,6 +29,12 @@ test("hostOk: localhost / 127.0.0.1 / [::1] はポートを問わず通す", () 
   assert.equal(hostOk("127.0.0.1:43117"), true);
   assert.equal(hostOk("[::1]:4989"), true);
   assert.equal(hostOk("localhost"), true);
+});
+
+test("hostOk: loopback の別表記は通す（仕様の固定。ブラウザは接続先が loopback の時だけこれらを送る）", () => {
+  assert.equal(hostOk("LOCALHOST:4989"), true);
+  assert.equal(hostOk("127.1"), true);
+  assert.equal(hostOk("0x7f000001"), true);
 });
 
 test("hostOk: DNS リバインディング相当の Host・不正な Host は弾く", () => {

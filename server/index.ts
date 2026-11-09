@@ -9,7 +9,7 @@ import { ModelHub } from "../core/hub.ts";
 import { OpSchema } from "../core/ops.ts";
 import { toSQL } from "../core/sql.ts";
 import { FileStore } from "../core/store.ts";
-import { BodyTooLargeError, hostOk, MAX_BODY_BYTES, originOk as originAllowed, readBodyLimited, resolveStaticFile } from "./guard.ts";
+import { BodyTooLargeError, hostOk, MAX_BODY_BYTES, originOk as isAllowedOrigin, readBodyLimited, resolveStaticFile } from "./guard.ts";
 
 /* ────────────────────────────────────────────────────────────
    drawzu ローカルサーバー（ADR-0003 Phase 1）
@@ -36,7 +36,7 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);
-const originOk = (origin: string | undefined) => originAllowed(origin, ALLOWED_ORIGINS);
+const originOk = (origin: string | undefined) => isAllowedOrigin(origin, ALLOWED_ORIGINS);
 
 /* アイドル自動停止（MCPブリッジの自動起動と一対のライフサイクル管理）。
    ブラウザ(WS)が1つも繋がっておらず、最後のアクセスからこの時間が過ぎたら自発終了する。
@@ -68,7 +68,6 @@ const MIME: Record<string, string> = {
 };
 
 const server = createServer(async (req, res) => {
-  lastActivity = Date.now();
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
 
   if (!hostOk(req.headers.host)) {
@@ -76,6 +75,8 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ error: "localhost 以外の Host からの要求は受け付けません" }));
     return;
   }
+  // 弾いた要求でアイドル自動停止を延命させない（Host 検査の後で更新する）
+  lastActivity = Date.now();
 
   // MCPブリッジの生存確認・接続先確認用。root を返すのは「別プロジェクトの
   // サーバーに誤接続していないか」をブリッジ側で検証できるようにするため
@@ -127,10 +128,11 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ version, applied: ops.length }));
     } catch (e: any) {
+      // 413 でも socket は閉じない（残りは readBodyLimited / Node が読み捨てる）。即 destroy すると
+      // クライアントに 413 が届く前に RST になり、MCP ブリッジが「通信失敗」と誤報する
       const status = e instanceof BodyTooLargeError ? 413 : 400;
       res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ error: String(e?.message ?? e) }));
-      if (status === 413) req.destroy(); // 残りの本文を読み続けない
     }
     return;
   }
@@ -171,8 +173,20 @@ const wss = new WebSocketServer({
     originOk(origin) && hostOk(req.headers.host),
 });
 
+// ws は server オプション指定時に http サーバーの 'error' も wss へ転送する。ここで受けるだけだと
+// listen 失敗(EADDRINUSE)まで飲み込んで「何も listen しないプロセス」が残るので、
+// サーバー自身のエラーは明示的に落とす（MCP ブリッジは ping で生存判定するので再起動に支障はない）
+server.on("error", (e: NodeJS.ErrnoException) => {
+  console.error(`[drawzu] サーバーを起動できません: ${e.code ?? ""} ${e.message}`);
+  process.exit(1);
+});
+wss.on("error", (e) => console.error("[drawzu] ws server error:", e.message));
+
 wss.on("connection", (ws: WebSocket) => {
   lastActivity = Date.now();
+  // maxPayload 超過・不正フレームは ws が接続ごとの 'error' で通知し、リスナーが無いと
+  // プロセスごと落ちる（ws 側が 1009 等で close まで行うので、ここでは記録だけでよい）
+  ws.on("error", (e) => console.warn("[drawzu] ws error:", e.message));
   // 切断時刻を起点にしないと「ブラウザを長時間開いて閉じた直後」に即終了してしまう
   ws.on("close", () => {
     lastActivity = Date.now();

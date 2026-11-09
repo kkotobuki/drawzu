@@ -63,5 +63,7 @@ export class ModelHub {
       this.#saveTimer = null;
       await this.store.save(this.#model);
     }
+    // タイマーが既に発火して書き込み中の保存も待つ（待たずに process.exit すると最後の変更が落ちる）
+    await this.store.flush?.();
   }
 }

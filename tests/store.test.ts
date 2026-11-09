@@ -24,3 +24,17 @@ test("FileStore.save: 並行保存でも落ちず、最後の保存内容が残�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("FileStore.flush: 進行中の保存が終わるまで待つ", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "drawzu-store-"));
+  try {
+    const store = new FileStore(join(dir, ".drawzu", "model.json"));
+    const m: Model = { ...emptyModel(), tables: [{ id: "t_flush", name: "f", x: 0, y: 0, columns: [], indexes: [], rlsEnabled: false, rls: [], comment: null }] };
+    void store.save(m); // await しない（タイマー発火済みで書き込み中、に相当）
+    await store.flush();
+    const saved = JSON.parse(readFileSync(join(dir, ".drawzu", "model.json"), "utf8")) as Model;
+    assert.equal(saved.tables[0].id, "t_flush");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

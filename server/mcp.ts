@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { MAX_BODY_BYTES } from "./guard.ts";
+import { singleFlight } from "./single-flight.ts";
 
 /* ────────────────────────────────────────────────────────────
    drawzu MCP ブリッジ（ADR-0003 Phase 2）— AIの窓。
@@ -70,28 +72,14 @@ function assertRoot(root: string | null): void {
   }
 }
 
-let ensured = false;
-let ensuring: Promise<void> | null = null;
-
-/** サーバーが立っていなければ detached で起動し、応答するまで待つ。
-    Claude Code がツールを並列に呼ぶと api() が同時に複数走るので、進行中の確認・起動は
-    1本に束ねる（束ねないと同じポート・同じ model.json に向けてサーバーが複数 spawn され、
-    起動時の保存が競合して落ちる） */
-function ensureServer(): Promise<void> {
-  if (ensured) return Promise.resolve();
-  if (!ensuring) {
-    ensuring = ensureServerOnce().finally(() => {
-      ensuring = null;
-    });
-  }
-  return ensuring;
-}
+/** サーバーの確認・起動を 1 本に束ねる（並列ツール呼び出しでの二重 spawn 防止）。
+    通信に失敗したら reset() して次の呼び出しで再確認・再起動する */
+const ensureServer = singleFlight(ensureServerOnce);
 
 async function ensureServerOnce(): Promise<void> {
   const alive = await ping();
   if (alive) {
     assertRoot(alive.root);
-    ensured = true;
     return;
   }
 
@@ -113,7 +101,6 @@ async function ensureServerOnce(): Promise<void> {
     const health = await ping();
     if (health) {
       assertRoot(health.root);
-      ensured = true;
       return;
     }
   }
@@ -124,12 +111,12 @@ async function ensureServerOnce(): Promise<void> {
 }
 
 async function api(path: string, init?: RequestInit): Promise<string> {
-  await ensureServer();
+  await ensureServer.run();
   let res: Response;
   try {
     res = await fetch(`${BASE}${path}`, init);
   } catch {
-    ensured = false; // 起動確認後に落ちた。次の呼び出しで再起動を試みる
+    ensureServer.reset(); // 起動確認後に落ちた。次の呼び出しで再起動を試みる
     throw new Error(`drawzu サーバー(${BASE})との通信に失敗しました。もう一度試してください。`);
   }
   const body = await res.text();
@@ -173,10 +160,17 @@ server.tool(
   ].join("\n"),
   { ops: z.array(z.record(z.unknown())).describe("適用する op の配列。上記の形式に従うこと") },
   async ({ ops }) => {
+    const body = JSON.stringify({ ops });
+    // サーバー側の本文上限(413)に当たると原因が伝わりにくいので、送る前に判定して明示する
+    if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+      throw new Error(
+        `ops が大きすぎます（${Buffer.byteLength(body)} bytes > 上限 ${MAX_BODY_BYTES} bytes）。SET_MODEL を分けるか、テーブル単位の op に分割してください。`
+      );
+    }
     const res = await api("/api/ops", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ops }),
+      body,
     });
     return text(`適用しました: ${res}`);
   }

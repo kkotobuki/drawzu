@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
+import { MAX_BODY_BYTES } from "../server/guard.ts";
 
 /* server/index.ts を実プロセスとして起動し、HTTP/WS の境界が効くことを確認する回帰テスト。
    モデルの置き場は一時ディレクトリ（リポジトリの .drawzu は触らない） */
@@ -52,10 +53,21 @@ before(async () => {
   throw new Error(`server did not start:\n${log}`);
 });
 
-after(() => {
-  child?.kill("SIGTERM");
+after(async () => {
+  // SIGTERM ハンドラ（flush → model.json 書き込み）と rm が競合しないよう、終了を待ってから消す
+  if (child && child.exitCode === null) {
+    await new Promise<void>((r) => {
+      child.once("exit", () => r());
+      child.kill("SIGTERM");
+    });
+  }
   rmSync(root, { recursive: true, force: true });
 });
+
+async function tableIds(): Promise<string[]> {
+  const body = (await (await fetch(`${base()}/api/model`)).json()) as { model: { tables: { id: string }[] } };
+  return body.model.tables.map((t) => t.id);
+}
 
 test("GET /api/health: 正しい Host なら ok と root を返す", async () => {
   const res = await fetch(`${base()}/api/health`);
@@ -91,40 +103,64 @@ test("Host が localhost:別ポート(vite dev プロキシ経由)や [::1] は�
   assert.equal(await getWithHost("/api/health", `[::1]:${port}`), 200);
 });
 
-const op = { type: "ADD_TABLE", table: { id: "t_x", name: "x", columns: [] } };
+const opWith = (id: string) => ({ type: "ADD_TABLE", table: { id, name: id, columns: [] } });
 
 test("POST /api/ops: 許可外 Origin は 403、モデルは変わらない", async () => {
   const res = await fetch(`${base()}/api/ops`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: "http://evil.example" },
-    body: JSON.stringify({ ops: [op] }),
+    body: JSON.stringify({ ops: [opWith("t_evil_origin")] }),
   });
   assert.equal(res.status, 403);
-  const model = (await (await fetch(`${base()}/api/model`)).json()) as { model: { tables: unknown[] } };
-  assert.equal(model.model.tables.length, 0);
+  assert.ok(!(await tableIds()).includes("t_evil_origin"));
 });
 
-test("POST /api/ops: Content-Type が application/json 以外は 415", async () => {
+test("POST /api/ops: Content-Type が application/json 以外は 415、charset 付きは通す", async () => {
   const res = await fetch(`${base()}/api/ops`, {
     method: "POST",
     headers: { "content-type": "text/plain" },
-    body: JSON.stringify({ ops: [op] }),
+    body: JSON.stringify({ ops: [opWith("t_text_plain")] }),
   });
   assert.equal(res.status, 415);
+  assert.ok(!(await tableIds()).includes("t_text_plain"));
+  const ok = await fetch(`${base()}/api/ops`, {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ ops: [opWith("t_charset")] }),
+  });
+  assert.equal(ok.status, 200);
+  assert.ok((await tableIds()).includes("t_charset"));
 });
 
-test("POST /api/ops: 本文が上限超なら 413", async () => {
-  const huge = JSON.stringify({ ops: [{ ...op, table: { ...op.table, comment: "x".repeat(11 * 1024 * 1024) } }] });
-  const res = await fetch(`${base()}/api/ops`, {
+test("POST /api/ops: 本文が上限超なら 413 がクライアントに届き、モデルは変わらない", async () => {
+  const over = { ...opWith("t_huge"), table: { id: "t_huge", name: "huge", columns: [], comment: "x".repeat(MAX_BODY_BYTES + 1024) } };
+  // Content-Length 付き（事前拒否の経路）と chunked（読みながら超過する経路）の両方で 413 を受け取れること
+  const withLength = await fetch(`${base()}/api/ops`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: huge,
-  }).catch((e) => e);
-  // サーバーは 413 を返して接続を閉じる。クライアント側では 413 か接続エラーのどちらかで観測される
-  if (res instanceof Response) assert.equal(res.status, 413);
-  else assert.ok(res instanceof Error);
-  const model = (await (await fetch(`${base()}/api/model`)).json()) as { model: { tables: unknown[] } };
-  assert.equal(model.model.tables.length, 0);
+    body: JSON.stringify({ ops: [over] }),
+  });
+  assert.equal(withLength.status, 413);
+  const chunk = Buffer.from("x".repeat(64 * 1024));
+  const stream = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(chunk);
+      sent += chunk.length;
+      if (sent > MAX_BODY_BYTES + chunk.length) controller.close();
+    },
+  });
+  let sent = 0;
+  const chunked = await fetch(`${base()}/api/ops`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: stream,
+    // @ts-expect-error undici 拡張: ストリーム本文は duplex 指定が必要
+    duplex: "half",
+  });
+  assert.equal(chunked.status, 413);
+  assert.ok(!(await tableIds()).includes("t_huge"));
+  // 同じサーバーが引き続き応答する（接続を乱暴に切っていない）
+  assert.equal((await fetch(`${base()}/api/health`)).status, 200);
 });
 
 test("POST /api/ops: 不正な op は 400 で、形式エラーのみ返す", async () => {
@@ -142,11 +178,10 @@ test("POST /api/ops: Origin 無し(MCPブリッジ相当)+JSON は適用され�
   const res = await fetch(`${base()}/api/ops`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ops: [op] }),
+    body: JSON.stringify({ ops: [opWith("t_apply")] }),
   });
   assert.equal(res.status, 200);
-  const model = (await (await fetch(`${base()}/api/model`)).json()) as { model: { tables: { id: string }[] } };
-  assert.deepEqual(model.model.tables.map((t) => t.id), ["t_x"]);
+  assert.ok((await tableIds()).includes("t_apply"));
 });
 
 function wsAttempt(headers: Record<string, string>): Promise<"open" | number> {
@@ -169,4 +204,17 @@ test("WebSocket: 許可外 Origin / 非 localhost Host は握手で拒否され�
 test("WebSocket: Origin 無し(同一マシン)・許可 Origin は接続できる", async () => {
   assert.equal(await wsAttempt({}), "open");
   assert.equal(await wsAttempt({ origin: `http://localhost:${port}` }), "open");
+});
+
+test("WebSocket: maxPayload 超のメッセージは 1009 で閉じられ、サーバーは生き続ける", async () => {
+  const code = await new Promise<number>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    ws.on("open", () => ws.send("x".repeat(MAX_BODY_BYTES + 1)));
+    ws.on("close", (c) => resolve(c));
+    ws.on("error", reject);
+  });
+  assert.equal(code, 1009);
+  assert.equal((await fetch(`${base()}/api/health`)).status, 200);
+  // 落ちていないので新しい WS も張れる
+  assert.equal(await wsAttempt({}), "open");
 });

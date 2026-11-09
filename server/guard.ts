@@ -42,19 +42,34 @@ export class BodyTooLargeError extends Error {
   }
 }
 
-/** 本文を上限付きで読む。超えたら BodyTooLargeError を投げ、以降は読まない */
-export async function readBodyLimited(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
+/** 本文を上限付きで読む。超えたら BodyTooLargeError で reject する。
+    超過後も残りの本文は読み捨てて接続を生かす（即 destroy すると未読データ付きで socket が
+    閉じられ、クライアントは 413 を受け取る前に EPIPE/ECONNRESET になる）。
+    読み捨ての時間は server.requestTimeout（既定 300s）で上限が付く */
+export function readBodyLimited(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
   const declared = Number(req.headers["content-length"]);
-  if (Number.isFinite(declared) && declared > limit) throw new BodyTooLargeError(limit);
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buf = chunk as Buffer;
-    total += buf.length;
-    if (total > limit) throw new BodyTooLargeError(limit);
-    chunks.push(buf);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+  // Content-Length で事前に分かる超過は読む前に拒否する。残りは Node が応答完了時に読み捨てる
+  if (Number.isFinite(declared) && declared > limit) return Promise.reject(new BodyTooLargeError(limit));
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let failed = false;
+    req.on("data", (buf: Buffer) => {
+      if (failed) return; // 超過後は捨てるだけ（メモリに溜めない）
+      total += buf.length;
+      if (total > limit) {
+        failed = true;
+        chunks.length = 0;
+        reject(new BodyTooLargeError(limit));
+        return;
+      }
+      chunks.push(buf);
+    });
+    req.on("end", () => {
+      if (!failed) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+  });
 }
 
 /** URL パスを web/dist 内のファイルパスへ解決する。dist の外に出るなら null */

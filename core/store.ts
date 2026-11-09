@@ -11,6 +11,8 @@ import { ModelSchema, type Model } from "./model.ts";
 export interface ModelStore {
   load(): Promise<Model | null>;
   save(model: Model): Promise<void>;
+  /** 進行中の保存がすべて終わるのを待つ（プロセス終了前に使う）。実装が無ければ待つものが無い */
+  flush?(): Promise<void>;
 }
 
 export class FileStore implements ModelStore {
@@ -35,6 +37,11 @@ export class FileStore implements ModelStore {
     // 失敗しても次の保存が詰まらないように、キュー自体は常に解決させる
     this.#queue = run.catch(() => {});
     return run;
+  }
+
+  /** キューに並んだ保存がすべて完了するまで待つ（失敗は呼び出し元へ既に返しているので待つだけ） */
+  flush(): Promise<void> {
+    return this.#queue;
   }
 
   async #write(model: Model): Promise<void> {
