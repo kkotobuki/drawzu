@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ModelSchema, type Model } from "./model.ts";
 
@@ -16,8 +17,10 @@ export interface ModelStore {
 }
 
 export class FileStore implements ModelStore {
-  /** 保存を直列化する。並行した save() が同じ一時ファイルを書いて rename で競合しないように */
+  /** 保存を直列化する。同一プロセス内で並行した save() が rename で競合しないように */
   #queue: Promise<void> = Promise.resolve();
+  /** 直近の保存が失敗していればその理由。成功で消す。flush() で終了側に伝えるために持つ */
+  #lastError: unknown = null;
 
   constructor(readonly filePath: string) {}
 
@@ -34,21 +37,37 @@ export class FileStore implements ModelStore {
 
   save(model: Model): Promise<void> {
     const run = this.#queue.then(() => this.#write(model));
-    // 失敗しても次の保存が詰まらないように、キュー自体は常に解決させる
-    this.#queue = run.catch(() => {});
+    // 失敗しても次の保存が詰まらないように、キュー自体は常に解決させる。失敗は #lastError に残す
+    this.#queue = run.then(
+      () => {
+        this.#lastError = null;
+      },
+      (e) => {
+        this.#lastError = e;
+      }
+    );
     return run;
   }
 
-  /** キューに並んだ保存がすべて完了するまで待つ（失敗は呼び出し元へ既に返しているので待つだけ） */
-  flush(): Promise<void> {
-    return this.#queue;
+  /** キューに並んだ保存がすべて完了するまで待つ。最後の保存が失敗していればその理由で reject する
+      （終了処理が「保存できたつもり」で exit 0 しないように） */
+  async flush(): Promise<void> {
+    await this.#queue;
+    if (this.#lastError != null) throw this.#lastError;
   }
 
   async #write(model: Model): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    // 半端な書き込みで model.json を壊さないよう、一時ファイルに書いてから置き換える
-    const tmp = `${this.filePath}.tmp`;
-    await writeFile(tmp, JSON.stringify(model, null, 2) + "\n", "utf8");
-    await rename(tmp, this.filePath);
+    // 半端な書き込みで model.json を壊さないよう、一時ファイルに書いてから置き換える。
+    // 一時ファイル名は書き込みごとに固有にする: 別プロセス（別 Claude セッションの自動起動など）や
+    // 同一パスを持つ別インスタンスが同時に書いても、互いの .tmp を rename で奪い合わない（rename 自体は atomic）
+    const tmp = `${this.filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(model, null, 2) + "\n", "utf8");
+      await rename(tmp, this.filePath);
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
   }
 }

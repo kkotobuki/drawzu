@@ -56,9 +56,11 @@ export class ModelHub {
     }, this.saveDelayMs);
   }
 
-  /** プロセス終了前などに未保存分を確実に書き出す */
+  /** プロセス終了前などに未保存分を確実に書き出す。
+      保存の await 中に新しい apply が来てタイマーが立ち直ることがあるので、立っていなくなるまで繰り返す。
+      最後の保存が失敗していれば reject する（呼び出し側が終了コードで伝える） */
   async flush(): Promise<void> {
-    if (this.#saveTimer) {
+    while (this.#saveTimer) {
       clearTimeout(this.#saveTimer);
       this.#saveTimer = null;
       await this.store.save(this.#model);

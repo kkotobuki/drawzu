@@ -164,7 +164,8 @@ server.tool(
     // サーバー側の本文上限(413)に当たると原因が伝わりにくいので、送る前に判定して明示する
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
       throw new Error(
-        `ops が大きすぎます（${Buffer.byteLength(body)} bytes > 上限 ${MAX_BODY_BYTES} bytes）。SET_MODEL を分けるか、テーブル単位の op に分割してください。`
+        `ops が大きすぎます（${Buffer.byteLength(body)} bytes > 上限 ${MAX_BODY_BYTES} bytes）。` +
+          `SET_MODEL は全置換なので分割できません。get_model で現状を確認し、ADD_TABLE / ADD_COLUMN 等の増分 op を複数回の patch_model に分けて送ってください。`
       );
     }
     const res = await api("/api/ops", {

@@ -47,7 +47,27 @@ let lastActivity = Date.now();
 const store = new FileStore(MODEL_PATH);
 const loaded = await store.load();
 const hub = new ModelHub(store, loaded ?? emptyModel());
-if (!loaded) await store.save(hub.model);
+// 無ければ空モデルを書くが、それは listen に成功した後で行う（同じプロジェクトで同時に起動された
+// 2 本目は EADDRINUSE で落ちる。listen 前に書くと敗者も model.json に触ってしまう）
+
+/* 終了処理。シグナルやアイドル停止で呼ばれる。
+   新しい変更の受け付けを止めてから flush しないと、flush の await 中に届いた変更が
+   保存されずに process.exit で消える。保存に失敗していれば exit 1 で知らせる */
+let shuttingDown = false;
+async function shutdown(reason: string): Promise<never> {
+  if (shuttingDown) return new Promise(() => {}); // 2 回目以降は最初の終了処理に任せる
+  shuttingDown = true;
+  console.log(`[drawzu] 終了します（${reason}）`);
+  server.close(); // 新規接続を止める（進行中の要求は shuttingDown で 503 を返す）
+  for (const client of wss.clients) client.close(1001, "server shutting down");
+  try {
+    await hub.flush();
+    process.exit(0);
+  } catch (e) {
+    console.error("[drawzu] 終了時の保存に失敗しました。model.json は直前の内容のままです:", e);
+    process.exit(1);
+  }
+}
 
 /** 全クライアント（開いているブラウザ）へ最新モデルを配る。except は楽観適用済みの送信元 */
 function broadcastModel(except?: import("ws").WebSocket) {
@@ -98,6 +118,11 @@ const server = createServer(async (req, res) => {
 
   // MCPブリッジ等の外部窓からの変更受け口。op の配列を順に適用して全ブラウザへ配る
   if (path === "/api/ops" && req.method === "POST") {
+    if (shuttingDown) {
+      res.writeHead(503, { "content-type": "application/json; charset=utf-8", connection: "close" });
+      res.end(JSON.stringify({ error: "サーバーは終了処理中です。もう一度試してください" }));
+      return;
+    }
     if (!originOk(req.headers.origin)) {
       res.writeHead(403, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ error: "許可されていない Origin からの要求です" }));
@@ -207,6 +232,10 @@ wss.on("connection", (ws: WebSocket) => {
       ws.send(JSON.stringify({ type: "error", message: op.error.message }));
       return;
     }
+    if (shuttingDown) {
+      ws.send(JSON.stringify({ type: "error", message: "サーバーは終了処理中です。変更は適用されませんでした" }));
+      return;
+    }
     const { version } = hub.apply(op.data);
     // 送信元は楽観適用済みなので ack のみ。他の窓には全量を配る
     ws.send(JSON.stringify({ type: "ack", version }));
@@ -218,23 +247,21 @@ wss.on("connection", (ws: WebSocket) => {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[drawzu] model: ${MODEL_PATH}`);
   console.log(`[drawzu] web:   http://localhost:${PORT}`);
+  if (!loaded) {
+    void store.save(hub.model).catch((e) => console.error("[drawzu] 初期モデルの保存に失敗:", e));
+  }
 });
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, async () => {
-    await hub.flush();
-    process.exit(0);
-  });
+  process.on(sig, () => void shutdown(sig));
 }
 
 if (IDLE_TIMEOUT_MIN > 0) {
   // チェック間隔はタイムアウトより細かく（短いタイムアウト設定でも遅延なく効くように）
   const tick = Math.min(60_000, IDLE_TIMEOUT_MIN * 60_000);
-  setInterval(async () => {
+  setInterval(() => {
     if (wss.clients.size > 0) return;
     if (Date.now() - lastActivity < IDLE_TIMEOUT_MIN * 60_000) return;
-    console.log(`[drawzu] ${IDLE_TIMEOUT_MIN}分間使われていないため自動終了します`);
-    await hub.flush();
-    process.exit(0);
+    void shutdown(`${IDLE_TIMEOUT_MIN}分間使われていないため自動終了`);
   }, tick);
 }
