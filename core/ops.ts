@@ -1,8 +1,11 @@
 import { z } from "zod";
 import {
+  ColumnPatchSchema,
   ColumnSchema,
+  IndexPatchSchema,
   IndexSchema,
   ModelSchema,
+  TablePatchSchema,
   TableSchema,
   type Model,
 } from "./model.ts";
@@ -23,7 +26,7 @@ export const OpSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("UPDATE_TABLE"),
     id: z.string(),
-    patch: TableSchema.partial().omit({ id: true, columns: true, indexes: true, rls: true }),
+    patch: TablePatchSchema,
   }),
   z.object({ type: z.literal("MOVE_TABLE"), id: z.string(), x: z.number(), y: z.number() }),
   z.object({ type: z.literal("ADD_COLUMN"), tableId: z.string(), column: ColumnSchema }),
@@ -31,7 +34,7 @@ export const OpSchema = z.discriminatedUnion("type", [
     type: z.literal("UPDATE_COLUMN"),
     tableId: z.string(),
     columnId: z.string(),
-    patch: ColumnSchema.partial().omit({ id: true }),
+    patch: ColumnPatchSchema,
   }),
   z.object({ type: z.literal("DELETE_COLUMN"), tableId: z.string(), columnId: z.string() }),
   z.object({ type: z.literal("ADD_INDEX"), tableId: z.string(), index: IndexSchema }),
@@ -39,7 +42,7 @@ export const OpSchema = z.discriminatedUnion("type", [
     type: z.literal("UPDATE_INDEX"),
     tableId: z.string(),
     indexId: z.string(),
-    patch: IndexSchema.partial().omit({ id: true }),
+    patch: IndexPatchSchema,
   }),
   z.object({ type: z.literal("DELETE_INDEX"), tableId: z.string(), indexId: z.string() }),
   /** AI が introspect 結果を一括で流し込む・全置換する用 */

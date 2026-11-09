@@ -11,8 +11,24 @@ export const IDX_ROW_H = 24;
 export const RLS_STRIP_H = 30;
 export const RLS_HEAD_H = 15;
 export const RLS_AUD_ROW_H = 17;
-/** メモ欄の固定高さ。可変にするとFK線の座標計算がDOM計測依存になるため固定 */
-export const MEMO_H = 46;
+/** メモ欄の1行の高さ（font-size 11px × line-height 1.5）と上下パディング */
+export const MEMO_LINE_H = 16.5;
+export const MEMO_PAD_V = 11;
+/** メモ本文の折り返し幅の見積もり。カード幅から左右パディング 12px ずつを引き、さらに 24px 削る。
+    半角の単語は途中で折り返せず丸ごと次の行へ送られるので、その分の行末の空きを吸収するため */
+const MEMO_INNER_W = CARD_W - 24 - 24;
+/** メモ欄の高さ。本文が全部見える行数を文字幅の見積もりで数える。
+    DOM を測らず文字数から決めるので、画面とHTMLエクスポートで同じ値になり FK線がずれない。
+    全角は 11.5px・半角は 7px と少し広めに見積もり、切れるより余白が出る側に倒す */
+export function memoLines(text: string): number {
+  let lines = 0;
+  for (const seg of text.split("\n")) {
+    let w = 0;
+    for (const ch of seg) w += /[^\x00-\x7f]/.test(ch) ? 11.5 : 7;
+    lines += Math.max(1, Math.ceil(w / MEMO_INNER_W));
+  }
+  return lines;
+}
 
 export const ink = "#232a36", sub = "#6b7280", line = "#e3e5ea", accent = "#4f5bd5", pkColor = "#b7791f";
 export const rlsColor = "#7c3aed";
@@ -22,7 +38,7 @@ export const CMD_COLOR: Record<string, string> = {
 };
 
 export function memoHeight(t: Table) {
-  return t.comment != null ? MEMO_H : 0;
+  return t.comment != null ? Math.ceil(memoLines(t.comment) * MEMO_LINE_H) + MEMO_PAD_V : 0;
 }
 export function idxSectionHeight(t: Table) {
   return t.indexes.length > 0 ? t.indexes.length * IDX_ROW_H + 8 : 0;
