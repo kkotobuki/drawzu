@@ -53,3 +53,29 @@ test("ModelHub.flush: タイマー発火済みで書き込み中の保存を待�
   await hub.flush();
   assert.equal(saved.length, 1);
 });
+
+test("ModelHub.flush: store.flush の待ち中に apply された変更も保存してから解決する", async () => {
+  // save は即完了、flush（書き込み中の待ち）だけが遅い store
+  const saved: Model[] = [];
+  let flushCalls = 0;
+  const store: ModelStore = {
+    async load() {
+      return null;
+    },
+    async save(m) {
+      saved.push(m);
+    },
+    flush() {
+      flushCalls++;
+      return new Promise((r) => setTimeout(r, 50));
+    },
+  };
+  const hub = new ModelHub(store, emptyModel(), 100);
+  hub.apply({ type: "ADD_TABLE", table: table("t_first") });
+  const flushing = hub.flush();
+  await new Promise((r) => setTimeout(r, 10)); // save 済み・store.flush 待ちの最中
+  hub.apply({ type: "ADD_TABLE", table: table("t_second") });
+  await flushing;
+  assert.deepEqual(saved.at(-1)!.tables.map((t) => t.id).sort(), ["t_first", "t_second"]);
+  assert.ok(flushCalls >= 2);
+});

@@ -60,12 +60,15 @@ export class ModelHub {
       保存の await 中に新しい apply が来てタイマーが立ち直ることがあるので、立っていなくなるまで繰り返す。
       最後の保存が失敗していれば reject する（呼び出し側が終了コードで伝える） */
   async flush(): Promise<void> {
-    while (this.#saveTimer) {
-      clearTimeout(this.#saveTimer);
-      this.#saveTimer = null;
-      await this.store.save(this.#model);
-    }
-    // タイマーが既に発火して書き込み中の保存も待つ（待たずに process.exit すると最後の変更が落ちる）
-    await this.store.flush?.();
+    do {
+      while (this.#saveTimer) {
+        clearTimeout(this.#saveTimer);
+        this.#saveTimer = null;
+        await this.store.save(this.#model);
+      }
+      // タイマーが既に発火して書き込み中の保存も待つ（待たずに process.exit すると最後の変更が落ちる）
+      await this.store.flush?.();
+      // その待ちの間に新しい apply が来てタイマーが立ち直っていたら、もう一周する
+    } while (this.#saveTimer);
   }
 }

@@ -147,6 +147,12 @@ const server = createServer(async (req, res) => {
         if (!r.success) throw new Error(`ops[${i}] が不正です: ${r.error.issues.map((e) => `${e.path.join(".")}: ${e.message}`).join(", ")}`);
         return r.data;
       });
+      // 本文を待っている間に終了処理が始まっていたら適用しない（適用すると flush 後に消えるのに 200 を返してしまう）
+      if (shuttingDown) {
+        res.writeHead(503, { "content-type": "application/json; charset=utf-8", connection: "close" });
+        res.end(JSON.stringify({ error: "サーバーは終了処理中です。変更は適用されませんでした。もう一度試してください" }));
+        return;
+      }
       let version = hub.version;
       for (const op of ops) version = hub.apply(op).version;
       broadcastModel();
