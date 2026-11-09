@@ -71,10 +71,23 @@ function assertRoot(root: string | null): void {
 }
 
 let ensured = false;
+let ensuring: Promise<void> | null = null;
 
-/** サーバーが立っていなければ detached で起動し、応答するまで待つ */
-async function ensureServer(): Promise<void> {
-  if (ensured) return;
+/** サーバーが立っていなければ detached で起動し、応答するまで待つ。
+    Claude Code がツールを並列に呼ぶと api() が同時に複数走るので、進行中の確認・起動は
+    1本に束ねる（束ねないと同じポート・同じ model.json に向けてサーバーが複数 spawn され、
+    起動時の保存が競合して落ちる） */
+function ensureServer(): Promise<void> {
+  if (ensured) return Promise.resolve();
+  if (!ensuring) {
+    ensuring = ensureServerOnce().finally(() => {
+      ensuring = null;
+    });
+  }
+  return ensuring;
+}
+
+async function ensureServerOnce(): Promise<void> {
   const alive = await ping();
   if (alive) {
     assertRoot(alive.root);

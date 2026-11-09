@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { emptyModel } from "../core/model.ts";
@@ -9,6 +9,7 @@ import { ModelHub } from "../core/hub.ts";
 import { OpSchema } from "../core/ops.ts";
 import { toSQL } from "../core/sql.ts";
 import { FileStore } from "../core/store.ts";
+import { BodyTooLargeError, hostOk, MAX_BODY_BYTES, originOk as originAllowed, readBodyLimited, resolveStaticFile } from "./guard.ts";
 
 /* ────────────────────────────────────────────────────────────
    drawzu ローカルサーバー（ADR-0003 Phase 1）
@@ -26,14 +27,16 @@ const WEB_DIST = fileURLToPath(new URL("../web/dist", import.meta.url));
 
 /* 悪意あるWebページからの localhost 攻撃(CSRF / WebSocketハイジャック)対策。
    ブラウザはクロスサイト要求に必ず Origin を付けるので、許可リスト外の Origin は弾く。
-   Origin が無いのは非ブラウザクライアント(MCPブリッジ・curl等 = 同一マシン)なので許可。 */
+   Origin が無いのは非ブラウザクライアント(MCPブリッジ・curl等 = 同一マシン)なので許可。
+   加えて Host ヘッダも localhost 系に限定する（DNS リバインディングで攻撃者ドメインから
+   同一オリジン扱いで GET /api/model 等を読まれるのを防ぐ）。判定の実体は server/guard.ts */
 const ALLOWED_ORIGINS = new Set([
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);
-const originOk = (origin: string | undefined) => !origin || ALLOWED_ORIGINS.has(origin);
+const originOk = (origin: string | undefined) => originAllowed(origin, ALLOWED_ORIGINS);
 
 /* アイドル自動停止（MCPブリッジの自動起動と一対のライフサイクル管理）。
    ブラウザ(WS)が1つも繋がっておらず、最後のアクセスからこの時間が過ぎたら自発終了する。
@@ -54,12 +57,6 @@ function broadcastModel(except?: import("ws").WebSocket) {
   }
 }
 
-async function readBody(req: import("node:http").IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -73,6 +70,12 @@ const MIME: Record<string, string> = {
 const server = createServer(async (req, res) => {
   lastActivity = Date.now();
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
+
+  if (!hostOk(req.headers.host)) {
+    res.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "localhost 以外の Host からの要求は受け付けません" }));
+    return;
+  }
 
   // MCPブリッジの生存確認・接続先確認用。root を返すのは「別プロジェクトの
   // サーバーに誤接続していないか」をブリッジ側で検証できるようにするため
@@ -106,7 +109,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     try {
-      const parsed = JSON.parse(await readBody(req));
+      const parsed = JSON.parse(await readBodyLimited(req));
       const raw: unknown[] = Array.isArray(parsed) ? parsed : parsed?.ops;
       if (!Array.isArray(raw) || raw.length === 0) {
         res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
@@ -124,8 +127,10 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ version, applied: ops.length }));
     } catch (e: any) {
-      res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+      const status = e instanceof BodyTooLargeError ? 413 : 400;
+      res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ error: String(e?.message ?? e) }));
+      if (status === 413) req.destroy(); // 残りの本文を読み続けない
     }
     return;
   }
@@ -140,9 +145,8 @@ const server = createServer(async (req, res) => {
     );
     return;
   }
-  const rel = path === "/" ? "/index.html" : path;
-  const file = normalize(join(WEB_DIST, rel));
-  if (!file.startsWith(WEB_DIST)) {
+  const file = resolveStaticFile(WEB_DIST, path);
+  if (!file) {
     res.writeHead(403).end();
     return;
   }
@@ -161,8 +165,10 @@ const server = createServer(async (req, res) => {
 const wss = new WebSocketServer({
   server,
   path: "/ws",
-  // クロスサイトのWebSocketハイジャック対策（ブラウザは Origin を必ず送る）
-  verifyClient: ({ origin }: { origin?: string }) => originOk(origin),
+  maxPayload: MAX_BODY_BYTES,
+  // クロスサイトのWebSocketハイジャック対策（ブラウザは Origin を必ず送る）+ DNS リバインディング対策
+  verifyClient: ({ origin, req }: { origin?: string; req: import("node:http").IncomingMessage }) =>
+    originOk(origin) && hostOk(req.headers.host),
 });
 
 wss.on("connection", (ws: WebSocket) => {

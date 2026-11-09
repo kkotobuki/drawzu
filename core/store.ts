@@ -14,6 +14,9 @@ export interface ModelStore {
 }
 
 export class FileStore implements ModelStore {
+  /** 保存を直列化する。並行した save() が同じ一時ファイルを書いて rename で競合しないように */
+  #queue: Promise<void> = Promise.resolve();
+
   constructor(readonly filePath: string) {}
 
   async load(): Promise<Model | null> {
@@ -27,7 +30,14 @@ export class FileStore implements ModelStore {
     return ModelSchema.parse(JSON.parse(raw));
   }
 
-  async save(model: Model): Promise<void> {
+  save(model: Model): Promise<void> {
+    const run = this.#queue.then(() => this.#write(model));
+    // 失敗しても次の保存が詰まらないように、キュー自体は常に解決させる
+    this.#queue = run.catch(() => {});
+    return run;
+  }
+
+  async #write(model: Model): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
     // 半端な書き込みで model.json を壊さないよう、一時ファイルに書いてから置き換える
     const tmp = `${this.filePath}.tmp`;
