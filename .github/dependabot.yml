@@ -1,0 +1,30 @@
+# Dependabot の版の定期更新。運用ルール（main への変更は develop から）に合わせて develop 宛てに出す。
+# 注意: target-branch は版の定期更新にだけ効く。脆弱性修正（security updates）の PR は
+#       GitHub の仕様で常に既定ブランチ(main)宛てになる。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    groups:
+      # マイナー・パッチはまとめて 1 本に（レビューの手間を減らす）。メジャーは個別 PR で影響を見る
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: npm
+    directory: /tools
+    target-branch: develop
+    schedule:
+      interval: monthly
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(deps-tools)"
